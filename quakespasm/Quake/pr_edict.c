@@ -658,6 +658,10 @@ void ED_WriteGlobals (FILE *f)
 		fprintf (f, "\"%s\" ", name);
 		fprintf (f, "\"%s\"\n", PR_UglyValueString(type, (eval_t *)&qcvm->globals[def->ofs]));
 	}
+
+	// clickdevin: fixes a bug where rune progress can get reset
+	fprintf(f, "\"svs_serverflags\" \"%d\"\n", svs.serverflags);
+
 	fprintf (f, "}\n");
 }
 
@@ -689,6 +693,13 @@ const char *ED_ParseGlobals (const char *data)
 
 		if (com_token[0] == '}')
 			Host_Error ("ED_ParseEntity: closing brace without data");
+
+		// clickdevin: fixes a bug where rune progress can get reset
+		if (!Q_strcmp(keyname, "svs_serverflags"))
+		{
+			svs.serverflags = Q_atoi(com_token);
+			continue;
+		}
 
 		key = ED_FindGlobal (keyname);
 		if (!key)
