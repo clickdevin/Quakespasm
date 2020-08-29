@@ -1,0 +1,20 @@
+Implemented:
+ - rune reset bugfix
+ - play demos on startup
+ - open menu at start
+
+Todo:
+ - new defaults:
+   - nearest neighbor filtering
+   - modern controls
+   - mouselook
+   - always run
+ - supersample antialiasing
+ - allow for changing antialiasing with only a vid_restart
+ - new menu options:
+   - crosshair
+   - filtering mode
+   - anisotrophy level
+   - antialiasing level
+   - antialiasing mode
+ - consolidate fitzmode/quakespasm differences (and remove fitz mode)

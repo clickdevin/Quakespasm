@@ -82,6 +82,7 @@ void M_Main_Key (int key);
 
 qboolean	m_entersound;		// play after drawing a frame, so caching
 								// won't disrupt the sound
+qboolean	m_ignore_entersound; // clickdevin: terrible
 qboolean	m_recursiveDraw;
 
 enum m_state_e	m_return_state;
@@ -218,7 +219,15 @@ void M_Menu_Main_f (void)
 	}
 	key_dest = key_menu;
 	m_state = m_main;
-	m_entersound = true;
+
+	// clickdevin: special case for M_ToggleMenu(2)
+	if (m_ignore_entersound)
+	{
+		m_entersound = false;
+		m_ignore_entersound = false;
+	}
+	else
+		m_entersound = true;
 
 	IN_UpdateGrabs();
 }
@@ -250,8 +259,6 @@ void M_Main_Key (int key)
 		m_state = m_none;
 		cls.demonum = m_save_demonum;
 		IN_UpdateGrabs();
-		if (!fitzmode)	/* QuakeSpasm customization: */
-			break;
 		if (cls.demonum != -1 && !cls.demoplayback && cls.state != ca_connected)
 			CL_NextDemo ();
 		break;
@@ -2809,7 +2816,11 @@ void M_ToggleMenu (int mode)
 		return;
 	}
 
-	m_entersound = true;
+	// clickdevin: no sound for startup (it stutters when a demo loads)
+	if (mode == 2)
+		m_ignore_entersound = true;
+	else
+		m_entersound = true;
 
 	if (key_dest == key_menu)
 	{

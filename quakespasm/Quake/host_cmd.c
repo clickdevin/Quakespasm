@@ -2484,13 +2484,8 @@ void Host_Startdemos_f (void)
 	if (!sv.active && cls.demonum != -1 && !cls.demoplayback)
 	{
 		cls.demonum = 0;
-		if (!fitzmode)
-		{  /* QuakeSpasm customization: */
-			/* go straight to menu, no CL_NextDemo */
-			cls.demonum = -1;
-			Cbuf_InsertText("togglemenu 1\n");
-			return;
-		}
+		// go straight to menu
+		Cbuf_InsertText("togglemenu 2\n");
 		CL_NextDemo ();
 	}
 	else
