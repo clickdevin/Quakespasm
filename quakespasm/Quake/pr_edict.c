@@ -660,7 +660,7 @@ void ED_WriteGlobals (FILE *f)
 	}
 
 	// clickdevin: fixes a bug where rune progress can get reset
-	fprintf(f, "\"svs_serverflags\" \"%d\"\n", svs.serverflags);
+	fprintf (f, "\"svs_serverflags\" \"%d\"\n", svs.serverflags);
 
 	fprintf (f, "}\n");
 }
@@ -695,9 +695,9 @@ const char *ED_ParseGlobals (const char *data)
 			Host_Error ("ED_ParseEntity: closing brace without data");
 
 		// clickdevin: fixes a bug where rune progress can get reset
-		if (!Q_strcmp(keyname, "svs_serverflags"))
+		if (!Q_strcmp (keyname, "svs_serverflags"))
 		{
-			svs.serverflags = Q_atoi(com_token);
+			svs.serverflags = Q_atoi (com_token);
 			continue;
 		}
 
