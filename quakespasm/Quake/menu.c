@@ -1693,6 +1693,50 @@ int		msgNumber;
 enum m_state_e	m_quit_prevstate;
 qboolean	wasInMenus;
 
+char *quitMessage [] = 
+{
+/* .........1.........2.... */
+  "  Are you gonna quit    ",
+  "  this game just like   ",
+  "   everything else?     ",
+  "                        ",
+ 
+  " Milord, methinks that  ",
+  "   thou art a lowly     ",
+  " quitter. Is this true? ",
+  "                        ",
+
+  " Do I need to bust your ",
+  "  face open for trying  ",
+  "        to quit?        ",
+  "                        ",
+
+  " Man, I oughta smack you",
+  "   for trying to quit!  ",
+  "     Press Y to get     ",
+  "      smacked out.      ",
+ 
+  " Press Y to quit like a ",
+  "   big loser in life.   ",
+  "  Press N to stay proud ",
+  "    and successful!     ",
+ 
+  "   If you press Y to    ",
+  "  quit, I will summon   ",
+  "  Satan all over your   ",
+  "      hard drive!       ",
+ 
+  "  Um, Asmodeus dislikes ",
+  " his children trying to ",
+  " quit. Press Y to return",
+  "   to your Tinkertoys.  ",
+ 
+  "  If you quit now, I'll ",
+  "  throw a blanket-party ",
+  "   for you next time!   ",
+  "                        "
+};
+
 void M_Menu_Quit_f (void)
 {
 	if (m_state == m_quit)
@@ -1766,13 +1810,8 @@ qboolean M_Quit_TextEntry (void)
 }
 
 
-void M_Quit_Draw (void) //johnfitz -- modified for new quit message
+void M_Quit_Draw (void)
 {
-	char	msg1[40];
-	char	msg2[] = "by Ozkan Sezer, Eric Wasylishen, others";/* msg2/msg3 are mostly [40] */
-	char	msg3[] = "Press y to quit";
-	int		boxlen;
-
 	if (wasInMenus)
 	{
 		m_state = m_quit_prevstate;
@@ -1781,19 +1820,14 @@ void M_Quit_Draw (void) //johnfitz -- modified for new quit message
 		m_state = m_quit;
 	}
 
-	sprintf(msg1, ENGINE_NAME_AND_VER);
+	// clickdevin: restore old quit message, but slightly more pretty
 
-	//okay, this is kind of fucked up.  M_DrawTextBox will always act as if
-	//width is even. Also, the width and lines values are for the interior of the box,
-	//but the x and y values include the border.
-	boxlen = q_max(strlen(msg1), q_max((sizeof(msg2)-1),(sizeof(msg3)-1))) + 1;
-	if (boxlen & 1) boxlen++;
-	M_DrawTextBox	(160-4*(boxlen+2), 76, boxlen, 4);
-
-	//now do the text
-	M_Print			(160-4*strlen(msg1), 88, msg1);
-	M_Print			(160-4*(sizeof(msg2)-1), 96, msg2);
-	M_PrintWhite		(160-4*(sizeof(msg3)-1), 104, msg3);
+	M_DrawTextBox (8, 60, 36, 8);
+	M_Print      (64, 76,  quitMessage[msgNumber*4+0]);
+	M_Print      (64, 84,  quitMessage[msgNumber*4+1]);
+	M_Print      (64, 92,  quitMessage[msgNumber*4+2]);
+	M_Print      (64, 100, quitMessage[msgNumber*4+3]);
+	M_PrintWhite (24, 116, "Press Y to quit, or N to continue.");
 }
 
 //=============================================================================
@@ -2981,12 +3015,6 @@ void M_Draw (void)
 		break;
 
 	case m_quit:
-		if (!fitzmode)
-		{ /* QuakeSpasm customization: */
-			/* Quit now! S.A. */
-			key_dest = key_console;
-			Host_Quit_f ();
-		}
 		M_Quit_Draw ();
 		break;
 
