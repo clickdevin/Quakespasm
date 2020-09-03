@@ -1,23 +1,24 @@
 Implemented:
- - rune reset bugfix
+ - rune reset bug workaround (save compatible)
  - play demos on startup
  - open menu at start
-
-Todo:
+   - togglemenu 2 - opens main menu without sound
  - new defaults:
    - nearest neighbor filtering
-   - modern controls
-   - mouselook
    - always run
+   - default viewsize is 100
+
+Todo:
  - supersample antialiasing
  - allow for changing antialiasing with only a vid_restart
+ - fix msaa bugs
  - open console with ~ from menu
  - new menu options:
    - crosshair
    - filtering mode
-   - anisotrophy level
+   - anisotropy level
    - antialiasing level
    - antialiasing mode
    - current game
    - fov
- - consolidate fitzmode/quakespasm differences (and remove fitz mode)
+ - new quit confirmation
