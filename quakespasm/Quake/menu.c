@@ -960,6 +960,7 @@ enum
 	OPT_DEFAULTS,
 	OPT_SCALE,
 	OPT_SCRSIZE,
+	OPT_FOV,
 	OPT_MOUSESPEED,
 	OPT_SBALPHA,
 	OPT_SNDVOL,
@@ -1023,6 +1024,12 @@ void M_AdjustSliders (int dir)
 		if (f > 120)	f = 120;
 		else if(f < 30)	f = 30;
 		Cvar_SetValue ("viewsize", f);
+		break;
+	case OPT_FOV:	// field of view
+		f = scr_fov.value + dir;
+		if (f > 120) f = 120;
+		else if (f < 80) f = 80;
+		Cvar_SetValue ("fov", f);
 		break;
 	case OPT_MOUSESPEED:	// mouse speed
 		f = sensitivity.value + dir * 0.5;
@@ -1167,6 +1174,11 @@ void M_Options_Draw (void)
 	M_Print (16, 32 + 8*OPT_SCRSIZE,	"           Screen size");
 	r = (scr_viewsize.value - 30) / (120 - 30);
 	M_DrawSlider (220, 32 + 8*OPT_SCRSIZE, r);
+
+	// OPT_FOV:
+	M_Print (16, 32 + 8*OPT_FOV,		"         Field of View");
+	r = (scr_fov.value - 80) / (120 - 80);
+	M_DrawSlider (220, 32 + 8*OPT_FOV, r);
 
 	// OPT_MOUSESPEED:
 	M_Print (16, 32 + 8*OPT_MOUSESPEED,	"           Mouse Speed");

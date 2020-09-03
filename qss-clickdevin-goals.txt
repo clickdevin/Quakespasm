@@ -9,8 +9,10 @@ Implemented:
    - nearest neighbor filtering
    - always run
    - default viewsize is 100
+ - moved around a few options
  - new menu options:
    - crosshair
+   - fov
 
 Todo:
  - supersample antialiasing
@@ -23,4 +25,3 @@ Todo:
    - antialiasing level
    - antialiasing mode
    - current game
-   - fov
