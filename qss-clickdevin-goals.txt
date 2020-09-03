@@ -11,10 +11,13 @@ Todo:
    - always run
  - supersample antialiasing
  - allow for changing antialiasing with only a vid_restart
+ - open console with ~ from menu
  - new menu options:
    - crosshair
    - filtering mode
    - anisotrophy level
    - antialiasing level
    - antialiasing mode
+   - current game
+   - fov
  - consolidate fitzmode/quakespasm differences (and remove fitz mode)
