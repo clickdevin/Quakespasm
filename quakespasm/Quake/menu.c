@@ -971,6 +971,7 @@ enum
 	OPT_ALWAYSMLOOK,
 	OPT_LOOKSPRING,
 	OPT_LOOKSTRAFE,
+	OPT_CROSSHAIR,
 //#ifdef _WIN32
 //	OPT_USEMOUSE,
 //#endif
@@ -1017,6 +1018,7 @@ void M_AdjustSliders (int dir)
 		Cvar_SetValue ("scr_conscale", f);
 		Cvar_SetValue ("scr_menuscale", f);
 		Cvar_SetValue ("scr_sbarscale", f);
+		Cvar_SetValue ("scr_crosshairscale", f);
 		break;
 	case OPT_SCRSIZE:	// screen size
 		f = scr_viewsize.value + dir * 10;
@@ -1111,6 +1113,10 @@ void M_AdjustSliders (int dir)
 
 	case OPT_LOOKSTRAFE:	// lookstrafe
 		Cvar_Set ("lookstrafe", lookstrafe.value ? "0" : "1");
+		break;
+	
+	case OPT_CROSSHAIR:		// crosshair
+		Cvar_Set ("crosshair", crosshair.value ? "0" : "1");
 		break;
 	}
 }
@@ -1231,6 +1237,10 @@ void M_Options_Draw (void)
 	// OPT_LOOKSTRAFE:
 	M_Print (16, 32 + 8*OPT_LOOKSTRAFE,	"            Lookstrafe");
 	M_DrawCheckbox (220, 32 + 8*OPT_LOOKSTRAFE, lookstrafe.value);
+
+	// OPT_CROSSHAIR:
+	M_Print (16, 32 + 8*OPT_CROSSHAIR,	"             Crosshair");
+	M_DrawCheckbox (220, 32 + 8*OPT_CROSSHAIR, crosshair.value);
 
 	// OPT_VIDEO:
 	if (vid_menudrawfn)

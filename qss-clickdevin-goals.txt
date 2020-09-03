@@ -2,12 +2,15 @@ Implemented:
  - rune reset bug workaround (save compatible)
  - original dos quit messages
  - play demos on startup
+ - scale option includes crosshair
  - open menu at start
    - togglemenu 2 - opens main menu without sound
  - new defaults:
    - nearest neighbor filtering
    - always run
    - default viewsize is 100
+ - new menu options:
+   - crosshair
 
 Todo:
  - supersample antialiasing
@@ -15,7 +18,6 @@ Todo:
  - fix msaa bugs
  - open console with ~ from menu
  - new menu options:
-   - crosshair
    - filtering mode
    - anisotropy level
    - antialiasing level
