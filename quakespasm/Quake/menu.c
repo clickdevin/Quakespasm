@@ -955,12 +955,11 @@ again:
 enum
 {
 	OPT_CUSTOMIZE = 0,
-	OPT_CONSOLE,	// 1
-	OPT_DEFAULTS,	// 2
+	OPT_VIDEO,		// 1
+	OPT_CONSOLE,	// 2
+	OPT_DEFAULTS,
 	OPT_SCALE,
 	OPT_SCRSIZE,
-	OPT_GAMMA,
-	OPT_CONTRAST,
 	OPT_MOUSESPEED,
 	OPT_SBALPHA,
 	OPT_SNDVOL,
@@ -975,7 +974,6 @@ enum
 //#ifdef _WIN32
 //	OPT_USEMOUSE,
 //#endif
-	OPT_VIDEO,	// This is the last before OPTIONS_ITEMS
 	OPTIONS_ITEMS
 };
 
@@ -1025,18 +1023,6 @@ void M_AdjustSliders (int dir)
 		if (f > 120)	f = 120;
 		else if(f < 30)	f = 30;
 		Cvar_SetValue ("viewsize", f);
-		break;
-	case OPT_GAMMA:	// gamma
-		f = vid_gamma.value - dir * 0.05;
-		if (f < 0.5)	f = 0.5;
-		else if (f > 1)	f = 1;
-		Cvar_SetValue ("gamma", f);
-		break;
-	case OPT_CONTRAST:	// contrast
-		f = vid_contrast.value + dir * 0.1;
-		if (f < 1)	f = 1;
-		else if (f > 2)	f = 2;
-		Cvar_SetValue ("contrast", f);
 		break;
 	case OPT_MOUSESPEED:	// mouse speed
 		f = sensitivity.value + dir * 0.5;
@@ -1163,6 +1149,9 @@ void M_Options_Draw (void)
 	// Draw the items in the order of the enum defined above:
 	// OPT_CUSTOMIZE:
 	M_Print (16, 32,			"              Controls");
+	// OPT_VIDEO:
+	if (vid_menudrawfn)
+		M_Print (16, 32 + 8*OPT_VIDEO,	"         Video Options");
 	// OPT_CONSOLE:
 	M_Print (16, 32 + 8*OPT_CONSOLE,	"          Goto console");
 	// OPT_DEFAULTS:
@@ -1179,16 +1168,6 @@ void M_Options_Draw (void)
 	r = (scr_viewsize.value - 30) / (120 - 30);
 	M_DrawSlider (220, 32 + 8*OPT_SCRSIZE, r);
 
-	// OPT_GAMMA:
-	M_Print (16, 32 + 8*OPT_GAMMA,		"            Brightness");
-	r = (1.0 - vid_gamma.value) / 0.5;
-	M_DrawSlider (220, 32 + 8*OPT_GAMMA, r);
-
-	// OPT_CONTRAST:
-	M_Print (16, 32 + 8*OPT_CONTRAST,	"              Contrast");
-	r = vid_contrast.value - 1.0;
-	M_DrawSlider (220, 32 + 8*OPT_CONTRAST, r);
-	
 	// OPT_MOUSESPEED:
 	M_Print (16, 32 + 8*OPT_MOUSESPEED,	"           Mouse Speed");
 	r = (sensitivity.value - 1)/10;
@@ -1241,10 +1220,6 @@ void M_Options_Draw (void)
 	// OPT_CROSSHAIR:
 	M_Print (16, 32 + 8*OPT_CROSSHAIR,	"             Crosshair");
 	M_DrawCheckbox (220, 32 + 8*OPT_CROSSHAIR, crosshair.value);
-
-	// OPT_VIDEO:
-	if (vid_menudrawfn)
-		M_Print (16, 32 + 8*OPT_VIDEO,	"         Video Options");
 
 // cursor
 	M_DrawCharacter (200, 32 + options_cursor*8, 12+((int)(realtime*4)&1));

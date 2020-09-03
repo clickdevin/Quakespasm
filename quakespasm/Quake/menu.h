@@ -70,6 +70,7 @@ void M_DrawCharacter (int cx, int line, int num);
 
 void M_DrawPic (int x, int y, qpic_t *pic);
 void M_DrawTransPic (int x, int y, qpic_t *pic);
+void M_DrawSlider (int x, int y, float range);
 void M_DrawCheckbox (int x, int y, int on);
 
 #endif	/* _QUAKE_MENU_H */

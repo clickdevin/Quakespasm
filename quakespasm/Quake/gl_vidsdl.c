@@ -1864,6 +1864,8 @@ void VID_SyncCvars (void)
 //==========================================================================
 
 enum {
+	VID_OPT_GAMMA,
+	VID_OPT_CONTRAST,
 	VID_OPT_MODE,
 	VID_OPT_BPP,
 	VID_OPT_REFRESHRATE,
@@ -2026,6 +2028,22 @@ static void VID_Menu_RebuildRateList (void)
 		Cvar_SetValue ("vid_refreshrate",(float)vid_menu_rates[0]);
 }
 
+static void VID_Menu_ChooseGamma (int dir)
+{
+	float f = vid_gamma.value - dir * 0.05;
+	if (f < 0.5)	f = 0.5;
+	else if (f > 1)	f = 1;
+	Cvar_SetValue ("gamma", f);
+}
+
+static void VID_Menu_ChooseContrast (int dir)
+{
+	float f = vid_contrast.value + dir * 0.1;
+	if (f < 1)	f = 1;
+	else if (f > 2)	f = 2;
+	Cvar_SetValue ("contrast", f);
+}
+
 /*
 ================
 VID_Menu_ChooseNextMode
@@ -2170,6 +2188,12 @@ static void VID_MenuKey (int key)
 		S_LocalSound ("misc/menu3.wav");
 		switch (video_options_cursor)
 		{
+		case VID_OPT_GAMMA:
+			VID_Menu_ChooseGamma (-1);
+			break;
+		case VID_OPT_CONTRAST:
+			VID_Menu_ChooseContrast (-1);
+			break;
 		case VID_OPT_MODE:
 			VID_Menu_ChooseNextMode (1);
 			break;
@@ -2194,6 +2218,12 @@ static void VID_MenuKey (int key)
 		S_LocalSound ("misc/menu3.wav");
 		switch (video_options_cursor)
 		{
+		case VID_OPT_GAMMA:
+			VID_Menu_ChooseGamma (1);
+			break;
+		case VID_OPT_CONTRAST:
+			VID_Menu_ChooseContrast (1);
+			break;
 		case VID_OPT_MODE:
 			VID_Menu_ChooseNextMode (-1);
 			break;
@@ -2220,6 +2250,12 @@ static void VID_MenuKey (int key)
 		m_entersound = true;
 		switch (video_options_cursor)
 		{
+		case VID_OPT_GAMMA:
+			VID_Menu_ChooseGamma (-1);
+			break;
+		case VID_OPT_CONTRAST:
+			VID_Menu_ChooseContrast (-1);
+			break;
 		case VID_OPT_MODE:
 			VID_Menu_ChooseNextMode (1);
 			break;
@@ -2262,6 +2298,7 @@ VID_MenuDraw
 static void VID_MenuDraw (void)
 {
 	int i, y;
+	float r;
 	qpic_t *p;
 	const char *title;
 
@@ -2288,7 +2325,19 @@ static void VID_MenuDraw (void)
 	{
 		switch (i)
 		{
+		case VID_OPT_GAMMA:
+			M_Print (16, y, "        Brightness");
+			r = (1.0 - vid_gamma.value) / 0.5;
+			M_DrawSlider (184, y, r);
+			break;
+		case VID_OPT_CONTRAST:
+			M_Print (16, y, "          Contrast");
+			r = vid_contrast.value - 1.0;
+			M_DrawSlider (184, y, r);
+			break;
+
 		case VID_OPT_MODE:
+			y += 8; // separate brightness/contrast
 			M_Print (16, y, "        Video mode");
 			M_Print (184, y, va("%ix%i", (int)vid_width.value, (int)vid_height.value));
 			break;
@@ -2311,6 +2360,7 @@ static void VID_MenuDraw (void)
 			else
 				M_Print (184, y, "N/A");
 			break;
+
 		case VID_OPT_TEST:
 			y += 8; //separate the test and apply items
 			M_Print (16, y, "      Test changes");
