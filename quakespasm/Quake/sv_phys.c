@@ -57,6 +57,24 @@ cvar_t	sv_sound_land			= {"sv_sound_land",			"demon/dland2.wav", CVAR_NONE};
 
 void SV_Physics_Toss (edict_t *ent);
 
+static void World_StartSound (edict_t *entity, float *origin, int channel, const char *sample, int volume, float attenuation)
+{	//small helper function
+	if (qcvm == &sv.qcvm)
+		SV_StartSound(entity, origin, channel, sample, volume, attenuation);
+	else
+	{
+		vec3_t mid;
+		int i;
+		if (!origin)
+		{
+			for (i = 0; i < 3; i++)
+				mid[i] = entity->v.origin[i]+0.5*(entity->v.mins[i]+entity->v.maxs[i]);
+			origin = mid;
+		}
+		S_StartSound(-NUM_FOR_EDICT(entity), channel, S_PrecacheSound(sample), origin, volume, attenuation);
+	}
+}
+
 /*
 ================
 SV_CheckAllEnts
@@ -935,12 +953,12 @@ qboolean SV_CheckWater (edict_t *ent)
 
 		tr = SV_Move(ent->v.origin, ent->v.mins, ent->v.maxs, point, 0, ent);
 		if (tr.fraction < 1)
-			sv_player->onladder = true;
+			ent->onladder = true;
 		else
-			sv_player->onladder = false;
+			ent->onladder = false;
 	}
 	else
-		sv_player->onladder = false;
+		ent->onladder = false;
 
 	point[0] = ent->v.origin[0];
 	point[1] = ent->v.origin[1];
@@ -1098,7 +1116,7 @@ void SV_WalkMove (edict_t *ent)
 	if (sv_nostep.value)
 		return;
 
-	if ( (int)sv_player->v.flags & FL_WATERJUMP )
+	if ( (int)ent->v.flags & FL_WATERJUMP )
 		return;
 
 	VectorCopy (ent->v.origin, nosteporg);
@@ -1169,9 +1187,13 @@ Player character actions
 */
 void SV_Physics_Client (edict_t	*ent, int num)
 {
+	eval_t *val;
+
 	if ( ! svs.clients[num-1].active )
 		return;		// unconnected slot
 
+	if (qcvm->extfuncs.SV_RunClientCommand)
+		return;	//we're doing independant player physics with this mod, so clientside prediction can do its thing.
 	if (!svs.clients[num-1].knowntoqc && sv_gameplayfix_spawnbeforethinks.value)
 		return;	//don't spam prethinks before we called putclientinserver.
 
@@ -1190,7 +1212,13 @@ void SV_Physics_Client (edict_t	*ent, int num)
 //
 // decide which move function to call
 //
-	switch ((int)ent->v.movetype)
+	if ((val = GetEdictFieldValue(ent, qcvm->extfields.customphysics)) && val->function)
+	{
+		pr_global_struct->time = qcvm->time;
+		pr_global_struct->self = EDICT_TO_PROG(ent);
+		PR_ExecuteProgram (val->function);
+	}
+	else switch ((int)ent->v.movetype)
 	{
 	case MOVETYPE_NONE:
 		if (!SV_RunThink (ent))
@@ -1303,7 +1331,7 @@ void SV_CheckWaterTransition (edict_t *ent)
 	{
 		if (ent->v.watertype == CONTENTS_EMPTY && *sv_sound_watersplash.string)
 		{	// just crossed into water
-			SV_StartSound (ent, NULL, 0, sv_sound_watersplash.string, 255, 1);
+			World_StartSound (ent, NULL, 0, sv_sound_watersplash.string, 255, 1);
 		}
 		ent->v.watertype = cont;
 		ent->v.waterlevel = 1;
@@ -1312,7 +1340,7 @@ void SV_CheckWaterTransition (edict_t *ent)
 	{
 		if (ent->v.watertype != CONTENTS_EMPTY && *sv_sound_watersplash.string)
 		{	// just crossed into water
-			SV_StartSound (ent, NULL, 0, sv_sound_watersplash.string, 255, 1);
+			World_StartSound (ent, NULL, 0, sv_sound_watersplash.string, 255, 1);
 		}
 		ent->v.watertype = CONTENTS_EMPTY;
 		ent->v.waterlevel = cont;
@@ -1469,7 +1497,7 @@ void SV_Physics_Step (edict_t *ent)
 		if ( (int)ent->v.flags & FL_ONGROUND )	// just hit ground
 		{
 			if (hitsound && *sv_sound_land.string)
-				SV_StartSound (ent, NULL, 0, sv_sound_land.string, 255, 1);
+				World_StartSound (ent, NULL, 0, sv_sound_land.string, 255, 1);
 		}
 	}
 
@@ -1493,12 +1521,40 @@ void SV_Physics (void)
 	int	i;
 	int	entity_cap; // For sv_freezenonclients 
 	edict_t	*ent;
+	eval_t *val;
+
+	int physics_mode;
+	if (qcvm->extglobals.physics_mode)
+		physics_mode = *qcvm->extglobals.physics_mode;
+	else
+		physics_mode = (qcvm==&cl.qcvm)?0:2;	//csqc doesn't run thinks by default. it was meant to simplify implementations, but we just force fields to match ssqc so its not that large a burden.
+
+	if (!physics_mode)
+	{
+		qcvm->time += host_frametime;
+		return;
+	}
+	else if (physics_mode==1)
+	{	//for dp compat. note that this violates MOVETYPE_PUSH.
+		for (i=0, ent = qcvm->edicts; i<qcvm->num_edicts ; i++, ent = NEXT_EDICT(ent))
+		{
+			if (ent->free)
+				continue;
+			SV_RunThink(ent);
+		}
+		qcvm->time += host_frametime;
+		return;
+	}
+//	else if (physics_mode==2) standard quake physics
 
 // let the progs know that a new frame has started
-	pr_global_struct->self = EDICT_TO_PROG(qcvm->edicts);
-	pr_global_struct->other = EDICT_TO_PROG(qcvm->edicts);
-	pr_global_struct->time = qcvm->time;
-	PR_ExecuteProgram (pr_global_struct->StartFrame);
+	if (pr_global_struct->StartFrame)
+	{
+		pr_global_struct->self = EDICT_TO_PROG(qcvm->edicts);
+		pr_global_struct->other = EDICT_TO_PROG(qcvm->edicts);
+		pr_global_struct->time = qcvm->time;
+		PR_ExecuteProgram (pr_global_struct->StartFrame);
+	}
 
 //SV_CheckAllEnts ();
 
@@ -1507,7 +1563,7 @@ void SV_Physics (void)
 //
 	ent = qcvm->edicts;
 
-	if (sv_freezenonclients.value)
+	if (sv_freezenonclients.value && qcvm == &sv.qcvm)
 		entity_cap = svs.maxclients + 1; // Only run physics on clients and the world
 	else
 		entity_cap = qcvm->num_edicts; 
@@ -1523,8 +1579,14 @@ void SV_Physics (void)
 			SV_LinkEdict (ent, true);	// force retouch even for stationary
 		}
 
-		if (i > 0 && i <= svs.maxclients)
+		if (i > 0 && i <= svs.maxclients && qcvm == &sv.qcvm)
 			SV_Physics_Client (ent, i);
+		else if ((val = GetEdictFieldValue(ent, qcvm->extfields.customphysics)) && val->function)
+		{
+			pr_global_struct->time = qcvm->time;
+			pr_global_struct->self = EDICT_TO_PROG(ent);
+			PR_ExecuteProgram (val->function);
+		}
 		else if (ent->v.movetype == MOVETYPE_PUSH)
 			SV_Physics_Pusher (ent);
 		else if (ent->v.movetype == MOVETYPE_NONE)
@@ -1566,6 +1628,6 @@ void SV_Physics (void)
 		PR_ExecuteProgram (qcvm->extfuncs.EndFrame);
 	}
 
-	if (!sv_freezenonclients.value) 
+	if (!(sv_freezenonclients.value && qcvm == &sv.qcvm))
 	  qcvm->time += host_frametime;
 }

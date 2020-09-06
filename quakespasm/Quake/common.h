@@ -47,6 +47,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 	((x) < (_minval) ? (_minval) :		\
 	 (x) > (_maxval) ? (_maxval) : (x))
 
+#define countof(x) (sizeof(x)/sizeof((x)[0]))
+
 typedef struct sizebuf_s
 {
 	qboolean	allowoverflow;	// if false, do a Sys_Error
@@ -142,6 +144,11 @@ int	Q_atoi (const char *str);
 float Q_atof (const char *str);
 void Q_ftoa(char *str, float in);
 int wildcmp(const char *wild, const char *string);
+void Info_RemoveKey(char *info, const char *key);
+void Info_SetKey(char *info, size_t infosize, const char *key, const char *val);
+const char *Info_GetKey(const char *info, const char *key, char *out, size_t outsize);
+void Info_Print(const char *info);
+void Info_Enumerate(const char *info, void(*cb)(void *ctx, const char *key, const char *value), void *cbctx);
 
 
 #include "strl_fn.h"
@@ -232,6 +239,7 @@ typedef struct searchpath_s
 					// Note that <install_dir>/game1 and
 					// <userdir>/game1 have the same id.
 	char	filename[MAX_OSPATH];
+	char	purename[MAX_OSPATH];	// 'gamedir[/foo.pak]'
 	pack_t	*pack;			// only one of filename / pack will be used
 	struct searchpath_s	*next;
 } searchpath_t;
@@ -246,7 +254,7 @@ extern	char	com_basedir[MAX_OSPATH];
 extern	char	com_gamedir[MAX_OSPATH];
 extern	int	file_from_pak;	// global indicating that file came from a pak
 
-void COM_ListAllFiles(void *ctx, const char *pattern, qboolean (*cb)(void *ctx, const char *fname, time_t mtime, size_t fsize, searchpath_t *spath));
+void COM_ListAllFiles(void *ctx, const char *pattern, qboolean (*cb)(void *ctx, const char *fname, time_t mtime, size_t fsize, searchpath_t *spath), unsigned int flags, const char *pkgfilter);
 const char *COM_GetGameNames(qboolean full);
 qboolean COM_GameDirMatches(const char *tdirs);
 

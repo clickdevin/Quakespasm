@@ -60,9 +60,9 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 //#define PEXT1_SHOWPIC				0x04000000
 //#define PEXT1_CHUNKEDDOWNLOADS		0x20000000
 #define PEXT1_CSQC					0x40000000	//(full)csqc additions, required for csqc ents+events.
-#define PEXT1_ACCEPTED_CLIENT		(/*PEXT1_SUPPORTED_CLIENT|*/PEXT1_CSQC|PEXT1_Q3BSP|PEXT1_Q2BSP|PEXT1_HLBSP)	//pext1 flags that we can accept from a server (aka: partial support)
-//#define PEXT1_SUPPORTED_CLIENT		(0)	//pext1 flags that we advertise to servers (aka: full support)
-//#define PEXT1_SUPPORTED_SERVER		(0)	//pext1 flags that we accept from clients.
+#define PEXT1_ACCEPTED_CLIENT		(PEXT1_SUPPORTED_CLIENT|PEXT1_Q3BSP|PEXT1_Q2BSP|PEXT1_HLBSP)	//pext1 flags that we can accept from a server (aka: partial support)
+#define PEXT1_SUPPORTED_CLIENT		(PEXT1_CSQC)	//pext1 flags that we advertise to servers (aka: full support)
+#define PEXT1_SUPPORTED_SERVER		(PEXT1_CSQC)	//pext1 flags that we accept from clients.
 
 // PROTOCOL_FTE_PEXT2 flags
 #define PEXT2_PRYDONCURSOR			0x00000001	//a mouse cursor exposed to ssqc
@@ -439,16 +439,21 @@ typedef struct entity_state_s
 	unsigned char	eflags;
 	unsigned char	tagindex;
 	unsigned short	tagentity;
-//	unsigned short	pad;
+	unsigned short	pad;
 	unsigned char	colormod[3];	//spike -- entity tints, *32
 	unsigned char	alpha;		//johnfitz -- added
+	unsigned int	solidsize;	//for csqc prediction logic.
+					#define ES_SOLID_NOT 0
+					#define ES_SOLID_BSP 31
+					#define ES_SOLID_HULL1 0x80201810
+					#define ES_SOLID_HULL2 0x80401820
 } entity_state_t;
 #define EFLAGS_STEP				1
 //#define EFLAGS_GLOWTRAIL		2
 #define EFLAGS_VIEWMODEL		4	//does not appear in reflections/third person. attached to the view.
 #define EFLAGS_EXTERIORMODEL	8	//only appears in reflections/third person
 //#define EFLAGS_				16
-//#define EFLAGS_COLOURMAPPED	32	//.colormap=1024|(top<<4)|bottom), instead of a player number
+#define EFLAGS_COLOURMAPPED		32	//.colormap=1024|(top<<4)|bottom), instead of a player number
 //#define EFLAGS_				64
 #define EFLAGS_ONGROUND			128	//for bobbing more than anything else. *sigh*.
 
@@ -456,12 +461,19 @@ extern entity_state_t nullentitystate;	//note: not all null.
 
 typedef struct
 {
+	float	servertime;
+	float	seconds;	//servertime-previous->servertime
 	vec3_t	viewangles;
 
 // intended velocities
 	float	forwardmove;
 	float	sidemove;
 	float	upmove;
+
+	unsigned int	buttons;
+	unsigned int	impulse;
+
+	unsigned int	sequence;
 } usercmd_t;
 
 #endif	/* _QUAKE_PROTOCOL_H */

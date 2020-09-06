@@ -34,13 +34,6 @@ char *PR_GetTempString (void)
 
 #define	RETURN_EDICT(e) (((int *)qcvm->globals)[OFS_RETURN] = EDICT_TO_PROG(e))
 
-#define	MSG_BROADCAST		0	// unreliable to all
-#define	MSG_ONE				1	// reliable to one (msg_entity)
-#define	MSG_ALL				2	// reliable to all
-#define	MSG_INIT			3	// write to the init string
-#define MSG_EXT_MULTICAST	4	// temporary buffer that can be splurged more reliably / with more control.
-#define MSG_EXT_ENTITY		5	// for csqc networking. we don't actually support this. I'm just defining it for completeness.
-
 /*
 ===============================================================================
 
@@ -1598,6 +1591,7 @@ sizebuf_t *WriteDest (void)
 		return &sv.signon;
 
 	case MSG_EXT_MULTICAST:
+	case MSG_EXT_ENTITY:	//just reuse it...
 		return &sv.multicast;
 
 	default:
@@ -1872,6 +1866,19 @@ static void PF_cl_sound (void)
 
 	S_StartSound(entnum, channel, S_PrecacheSound(sample), entity->v.origin, volume, attenuation);
 }
+static void PF_cl_ambientsound (void)
+{
+	const char	*samp;
+	float		*pos;
+	float		vol, attenuation;
+
+	pos = G_VECTOR (OFS_PARM0);
+	samp = G_STRING(OFS_PARM1);
+	vol = G_FLOAT(OFS_PARM2);
+	attenuation = G_FLOAT(OFS_PARM3);
+
+	S_StaticSound (S_PrecacheSound(samp), pos, vol, attenuation);
+}
 
 static void PF_cl_precache_sound (void)
 {
@@ -1885,6 +1892,21 @@ static void PF_cl_precache_sound (void)
 	S_PrecacheSound(s);
 }
 
+qmodel_t *PR_CSQC_GetModel(int idx)
+{
+	if (idx < 0)
+	{
+		idx = -idx;
+		if (idx < MAX_MODELS)
+			return cl.model_precache_csqc[idx];
+	}
+	else
+	{
+		if (idx < MAX_MODELS)
+			return cl.model_precache[idx];
+	}
+	return NULL;
+}
 int CL_Precache_Model(const char *name)
 {
 	int		i;
@@ -1899,37 +1921,43 @@ int CL_Precache_Model(const char *name)
 		if (!strcmp(cl.model_name[i], name))
 			return i;
 	}
+
+	//check if the client precached one, and if not then do it.
+	for (i = 1; i < MAX_MODELS; i++)
+	{
+		if (!*cl.model_name_csqc[i])
+			break;	//no more
+		if (!strcmp(cl.model_name_csqc[i], name))
+			return -i;
+	}
+
+	if (i < MAX_MODELS && strlen(name) < sizeof(cl.model_name_csqc[i]))
+	{
+		strcpy(cl.model_name_csqc[i], name);
+		cl.model_precache_csqc[i] = Mod_ForName (name, false);
+		if (cl.model_precache_csqc[i])
+			GL_BuildModel(cl.model_precache_csqc[i]);
+		return -i;
+	}
+
 	PR_RunError ("CL_Precache_Model: implementme");
 	return 0;
 }
 static void PF_cl_precache_model (void)
 {
-	const char	*s;
-	int		i;
-
-	s = G_STRING(OFS_PARM0);
+	const char *s = G_STRING(OFS_PARM0);
 	G_INT(OFS_RETURN) = G_INT(OFS_PARM0);
 	PR_CheckEmptyString (s);
-
-	//if the server precached the model then we don't need to do anything.
-	for (i = 1; i < MAX_MODELS; i++)
-	{
-		if (!*cl.model_name[i])
-			break;	//no more
-		if (!strcmp(cl.model_name[i], s))
-			return;
-	}
-	PR_RunError ("PF_cl_precache_model: implementme");
+	CL_Precache_Model(s);
 }
 static void PF_cl_setmodel (void)
 {
-	int		i;
-	const char	*m;
-	qmodel_t	*mod;
-	edict_t		*e;
+	edict_t *e = G_EDICT(OFS_PARM0);
+	const char *m = G_STRING(OFS_PARM1);
 
-	e = G_EDICT(OFS_PARM0);
-	m = G_STRING(OFS_PARM1);
+	int		i;
+	qmodel_t	*mod;
+	eval_t		*modelflags = GetEdictFieldValue(e, qcvm->extfields.modelflags);
 
 	i = CL_Precache_Model(m);
 
@@ -1973,10 +2001,101 @@ static void PF_cl_setmodel (void)
 			SetMinMaxSize (e, mod->clipmins, mod->clipmaxs, true);
 		else
 			SetMinMaxSize (e, mod->mins, mod->maxs, true);
+
+		if (modelflags)
+			modelflags->_float= (mod?mod->flags:0) & (0xff|MF_HOLEY);
 	}
 	//johnfitz
 	else
+	{
 		SetMinMaxSize (e, vec3_origin, vec3_origin, true);
+		if (modelflags)
+			modelflags->_float = 0;
+	}
+
+	if (e == qcvm->edicts)
+	{
+		if (mod && cl.worldmodel != mod)
+		{
+			qcvm->worldmodel = cl.worldmodel = mod;
+			R_NewMap ();
+		}
+	}
+}
+
+static void PF_cl_lightstyle (void)
+{
+	int style = G_FLOAT(OFS_PARM0);
+	const char *val = G_STRING(OFS_PARM1);
+	CL_UpdateLightstyle(style, val);
+}
+static void PF_cl_makestatic (void)
+{
+	edict_t	*ent = G_EDICT(OFS_PARM0);
+	entity_t *stat;
+	int		i;
+
+	i = cl.num_statics;
+	if (i >= cl.max_static_entities)
+	{
+		int ec = 64;
+		entity_t **newstatics = realloc(cl.static_entities, sizeof(*newstatics) * (cl.max_static_entities+ec));
+		entity_t *newents = Hunk_Alloc(sizeof(*newents) * ec);
+		if (!newstatics || !newents)
+			Host_Error ("Too many static entities");
+		cl.static_entities = newstatics;
+		while (ec--)
+			cl.static_entities[cl.max_static_entities++] = newents++;
+	}
+
+	stat = cl.static_entities[i];
+	cl.num_statics++;
+
+	SV_BuildEntityState(ent, &stat->baseline);
+
+// copy it to the current state
+
+	stat->netstate = stat->baseline;
+	stat->eflags = stat->netstate.eflags; //spike -- annoying and probably not used anyway, but w/e
+
+	stat->trailstate = NULL;
+	stat->emitstate = NULL;
+	stat->model = cl.model_precache[stat->baseline.modelindex];
+	stat->lerpflags |= LERP_RESETANIM; //johnfitz -- lerping
+	stat->frame = stat->baseline.frame;
+
+	stat->skinnum = stat->baseline.skin;
+	stat->effects = stat->baseline.effects;
+	stat->alpha = stat->baseline.alpha; //johnfitz -- alpha
+
+	VectorCopy (ent->baseline.origin, stat->origin);
+	VectorCopy (ent->baseline.angles, stat->angles);
+	if (stat->model)
+		R_AddEfrags (stat);
+
+// throw the entity away now
+	ED_Free (ent);
+}
+static void PF_cl_particle (void)
+{
+	float		*org = G_VECTOR(OFS_PARM0);
+	float		*dir = G_VECTOR(OFS_PARM1);
+	float		color = G_FLOAT(OFS_PARM2);
+	float		count = G_FLOAT(OFS_PARM3);
+
+	if (count == 255)
+	{
+		if (!PScript_RunParticleEffectTypeString(org, dir, 1, "te_explosion"))
+			count = 0;
+		else
+			count = 1024;
+	}
+	else
+	{
+		if (!PScript_RunParticleEffect(org, dir, color, count))
+			count = 0;
+	}
+	R_RunParticleEffect (org, dir, color, count);
 }
 
 #define PF_NoCSQC PF_Fixme
@@ -2018,7 +2137,7 @@ builtin_t pr_csqcbuiltins[] =
 	PF_walkmove,		// float(float yaw, float dist) walkmove
 	PF_Fixme,		// float(float yaw, float dist) walkmove
 	PF_droptofloor,
-	PF_CSQCToDo,//PF_cl_lightstyle,
+	PF_cl_lightstyle,
 	PF_rint,
 	PF_floor,
 	PF_ceil,
@@ -2031,7 +2150,7 @@ builtin_t pr_csqcbuiltins[] =
 	PF_cvar,
 	PF_localcmd,
 	PF_nextent,
-	PF_CSQCToDo,//PF_cl_particle,
+	PF_cl_particle,
 	PF_changeyaw,
 	PF_Fixme,
 	PF_vectoangles,
@@ -2055,7 +2174,7 @@ builtin_t pr_csqcbuiltins[] =
 
 	SV_MoveToGoal,
 	PF_precache_file,
-	PF_CSQCToDo,//PF_cl_makestatic,
+	PF_cl_makestatic,
 
 	PF_NoCSQC,//PF_changelevel,
 	PF_Fixme,
@@ -2063,7 +2182,7 @@ builtin_t pr_csqcbuiltins[] =
 	PF_cvar_set,
 	PF_NoCSQC,//PF_centerprint,
 
-	PF_CSQCToDo,//PF_ambientsound,
+	PF_cl_ambientsound,
 
 	PF_cl_precache_model,
 	PF_cl_precache_sound,

@@ -70,11 +70,11 @@ cvar_t	serverprofile = {"serverprofile","0",CVAR_NONE};
 cvar_t	fraglimit = {"fraglimit","0",CVAR_NOTIFY|CVAR_SERVERINFO};
 cvar_t	timelimit = {"timelimit","0",CVAR_NOTIFY|CVAR_SERVERINFO};
 cvar_t	teamplay = {"teamplay","0",CVAR_NOTIFY|CVAR_SERVERINFO};
-cvar_t	samelevel = {"samelevel","0",CVAR_NONE};
+cvar_t	samelevel = {"samelevel","0",CVAR_SERVERINFO};
 cvar_t	noexit = {"noexit","0",CVAR_NOTIFY|CVAR_SERVERINFO};
-cvar_t	skill = {"skill","1",CVAR_NONE};			// 0 - 3
-cvar_t	deathmatch = {"deathmatch","0",CVAR_NONE};	// 0, 1, or 2
-cvar_t	coop = {"coop","0",CVAR_NONE};			// 0 or 1
+cvar_t	skill = {"skill","1",CVAR_SERVERINFO};			// 0 - 3
+cvar_t	deathmatch = {"deathmatch","0",CVAR_SERVERINFO};	// 0, 1, or 2
+cvar_t	coop = {"coop","0",CVAR_SERVERINFO};			// 0 or 1
 
 cvar_t	pausable = {"pausable","1",CVAR_NONE};
 
@@ -489,15 +489,23 @@ void SV_DropClient (qboolean crash)
 	{
 		if (!client->knowntoqc)
 			continue;
-		MSG_WriteByte (&client->message, svc_updatename);
-		MSG_WriteByte (&client->message, host_client - svs.clients);
-		MSG_WriteString (&client->message, "");
+		if ((host_client->protocol_pext1 & PEXT1_CSQC) || (host_client->protocol_pext2 & PEXT2_REPLACEMENTDELTAS))
+		{
+			MSG_WriteByte (&client->message, svc_stufftext);
+			MSG_WriteString (&client->message, va("//fui %u \"\"\n", (unsigned)(host_client - svs.clients)));
+		}
+		else
+		{
+			MSG_WriteByte (&client->message, svc_updatename);
+			MSG_WriteByte (&client->message, host_client - svs.clients);
+			MSG_WriteString (&client->message, "");
+			MSG_WriteByte (&client->message, svc_updatecolors);
+			MSG_WriteByte (&client->message, host_client - svs.clients);
+			MSG_WriteByte (&client->message, 0);
+		}
 		MSG_WriteByte (&client->message, svc_updatefrags);
 		MSG_WriteByte (&client->message, host_client - svs.clients);
 		MSG_WriteShort (&client->message, 0);
-		MSG_WriteByte (&client->message, svc_updatecolors);
-		MSG_WriteByte (&client->message, host_client - svs.clients);
-		MSG_WriteByte (&client->message, 0);
 	}
 }
 
@@ -586,6 +594,14 @@ not reinitialize anything.
 */
 void Host_ClearMemory (void)
 {
+	if (cl.qcvm.extfuncs.CSQC_Shutdown)
+	{
+		PR_SwitchQCVM(&cl.qcvm);
+		PR_ExecuteProgram(qcvm->extfuncs.CSQC_Shutdown);
+		qcvm->extfuncs.CSQC_Shutdown = 0;
+		PR_SwitchQCVM(NULL);
+	}
+
 	Con_DPrintf ("Clearing memory\n");
 	D_FlushCaches ();
 	Mod_ClearAll ();
@@ -719,6 +735,104 @@ qmodel_t *CL_ModelForIndex(int index)
 	return cl.model_precache[index];
 }
 
+
+static void CL_LoadCSProgs(void)
+{
+	qboolean fullcsqc = false;
+	PR_ClearProgs(&cl.qcvm);
+	if (pr_checkextension.value && !cl_nocsqc.value)
+	{	//only try to use csqc if qc extensions are enabled.
+		char versionedname[MAX_QPATH];
+		unsigned int csqchash;
+		size_t csqcsize;
+		PR_SwitchQCVM(&cl.qcvm);
+		csqchash = strtoul(Info_GetKey(cl.serverinfo, "*csprogs", versionedname, sizeof(versionedname)), NULL, 0);
+		csqcsize = strtoul(Info_GetKey(cl.serverinfo, "*csprogssize", versionedname, sizeof(versionedname)), NULL, 0);
+
+		snprintf(versionedname, MAX_QPATH, "csprogsvers/%x.dat", csqchash);
+
+		//try csprogs.dat first, then fall back on progs.dat in case someone tried merging the two.
+		//we only care about it if it actually contains a CSQC_DrawHud, otherwise its either just a (misnamed) ssqc progs or a full csqc progs that would just crash us on 3d stuff.
+		if ((PR_LoadProgs(versionedname, false, PROGHEADER_CRC, pr_csqcbuiltins, pr_csqcnumbuiltins) && (qcvm->extfuncs.CSQC_DrawHud||cl.qcvm.extfuncs.CSQC_UpdateView))||
+			(PR_LoadProgs("csprogs.dat", false, PROGHEADER_CRC, pr_csqcbuiltins, pr_csqcnumbuiltins) && (qcvm->extfuncs.CSQC_DrawHud||cl.qcvm.extfuncs.CSQC_UpdateView))||
+			(PR_LoadProgs("progs.dat",   false, PROGHEADER_CRC, pr_csqcbuiltins, pr_csqcnumbuiltins) && (qcvm->extfuncs.CSQC_DrawHud||cl.qcvm.extfuncs.CSQC_UpdateView)))
+		{
+			qcvm->max_edicts = CLAMP (MIN_EDICTS,(int)max_edicts.value,MAX_EDICTS);
+			qcvm->edicts = (edict_t *) malloc (qcvm->max_edicts*qcvm->edict_size);
+			qcvm->num_edicts = qcvm->reserved_edicts = 1;
+			memset(qcvm->edicts, 0, qcvm->num_edicts*qcvm->edict_size);
+
+			//in terms of exploit protection this is kinda pointless as someone can just strip out this check and compile themselves. oh well.
+			if ((qcvm->progshash == csqchash && qcvm->progssize == csqcsize) || cls.demoplayback)
+				fullcsqc = true;
+			else
+			{	//okay, it doesn't match. full csqc is disallowed to prevent cheats, but we still allow simplecsqc...
+				if (!qcvm->extfuncs.CSQC_DrawHud)
+				{	//no simplecsqc entry points... abort entirely!
+					PR_ClearProgs(qcvm);
+					PR_SwitchQCVM(NULL);
+					return;
+				}
+				fullcsqc = false;
+				qcvm->nogameaccess = true;
+
+				qcvm->extfuncs.CSQC_Input_Frame = 0;		//prevent reading/writing input frames (no wallhacks please).
+				qcvm->extfuncs.CSQC_UpdateView = 0;		//will probably bug out. block it.
+				qcvm->extfuncs.CSQC_Ent_Update = 0;		//don't let the qc know where ents are... the server should prevent this, but make sure the user didn't cheese a 'cmd enablecsqc'
+				qcvm->extfuncs.CSQC_Ent_Remove = 0;
+				qcvm->extfuncs.CSQC_Parse_StuffCmd = 0;	//don't allow blocking stuffcmds... though we can't prevent cvar queries+sets, so this is probably futile...
+
+				qcvm->extglobals.clientcommandframe = NULL;	//input frames are blocked, so don't bother to connect these either.
+				qcvm->extglobals.servercommandframe = NULL;
+			}
+
+			qcvm->GetModel = PR_CSQC_GetModel;
+			//set a few globals, if they exist
+			if (qcvm->extglobals.maxclients)
+				*qcvm->extglobals.maxclients = cl.maxclients;
+			pr_global_struct->time = cl.time;
+			pr_global_struct->mapname = PR_SetEngineString(cl.mapname);
+			pr_global_struct->total_monsters = cl.statsf[STAT_TOTALMONSTERS];
+			pr_global_struct->total_secrets = cl.statsf[STAT_TOTALSECRETS];
+			pr_global_struct->deathmatch = cl.gametype;
+			pr_global_struct->coop = (cl.gametype == GAME_COOP) && cl.maxclients != 1;
+			if (qcvm->extglobals.player_localnum)
+				*qcvm->extglobals.player_localnum = cl.viewentity-1;	//this is a guess, but is important for scoreboards.
+
+			//set a few worldspawn fields too
+			qcvm->edicts->v.solid = SOLID_BSP;
+			qcvm->edicts->v.modelindex = 1;
+			qcvm->edicts->v.model = PR_SetEngineString(cl.worldmodel->name);
+			VectorCopy(cl.worldmodel->mins, qcvm->edicts->v.mins);
+			VectorCopy(cl.worldmodel->maxs, qcvm->edicts->v.maxs);
+			qcvm->edicts->v.message = PR_SetEngineString(cl.levelname);
+
+			//and call the init function... if it exists.
+			qcvm->worldmodel = cl.worldmodel;
+			SV_ClearWorld();
+			if (qcvm->extfuncs.CSQC_Init)
+			{
+				int maj = (int)QUAKESPASM_VERSION;
+				int min = (QUAKESPASM_VERSION-maj) * 100;
+				G_FLOAT(OFS_PARM0) = fullcsqc;
+				G_INT(OFS_PARM1) = PR_SetEngineString("QuakeSpasm-Spiked");
+				G_FLOAT(OFS_PARM2) = 10000*maj + 100*(min) + QUAKESPASM_VER_PATCH;
+				PR_ExecuteProgram(qcvm->extfuncs.CSQC_Init);
+			}
+
+			if (fullcsqc)
+			{
+				//let the server know.
+				MSG_WriteByte (&cls.message, clc_stringcmd);
+				MSG_WriteString (&cls.message, "enablecsqc");
+			}
+		}
+		else
+			PR_ClearProgs(qcvm);
+		PR_SwitchQCVM(NULL);
+	}
+}
+
 /*
 ==================
 Host_Frame
@@ -765,50 +879,7 @@ void _Host_Frame (double time)
 	{
 		if (CL_CheckDownloads())
 		{
-			PR_ClearProgs(&cl.qcvm);
-			if (pr_checkextension.value && !cl_nocsqc.value)
-			{	//only try to use csqc if qc extensions are enabled.
-				PR_SwitchQCVM(&cl.qcvm);
-				//try csprogs.dat first, then fall back on progs.dat in case someone tried merging the two.
-				//we only care about it if it actually contains a CSQC_DrawHud, otherwise its either just a (misnamed) ssqc progs or a full csqc progs that would just crash us on 3d stuff.
-				if ((PR_LoadProgs("csprogs.dat", false, PROGHEADER_CRC, pr_csqcbuiltins, pr_csqcnumbuiltins) && qcvm->extfuncs.CSQC_DrawHud)||
-					(PR_LoadProgs("progs.dat",   false, PROGHEADER_CRC, pr_csqcbuiltins, pr_csqcnumbuiltins) && qcvm->extfuncs.CSQC_DrawHud))
-				{
-					qcvm->max_edicts = CLAMP (MIN_EDICTS,(int)max_edicts.value,MAX_EDICTS);
-					qcvm->edicts = (edict_t *) malloc (qcvm->max_edicts*qcvm->edict_size);
-					qcvm->num_edicts = qcvm->reserved_edicts = 1;
-					memset(qcvm->edicts, 0, qcvm->num_edicts*qcvm->edict_size);
-
-					//set a few globals, if they exist
-					if (qcvm->extglobals.maxclients)
-						*qcvm->extglobals.maxclients = cl.maxclients;
-					pr_global_struct->time = cl.time;
-					pr_global_struct->mapname = PR_SetEngineString(cl.mapname);
-					pr_global_struct->total_monsters = cl.statsf[STAT_TOTALMONSTERS];
-					pr_global_struct->total_secrets = cl.statsf[STAT_TOTALSECRETS];
-					pr_global_struct->deathmatch = cl.gametype;
-					pr_global_struct->coop = (cl.gametype == GAME_COOP) && cl.maxclients != 1;
-					if (qcvm->extglobals.player_localnum)
-						*qcvm->extglobals.player_localnum = cl.viewentity-1;	//this is a guess, but is important for scoreboards.
-
-					//set a few worldspawn fields too
-					qcvm->edicts->v.message = PR_SetEngineString(cl.levelname);
-
-					//and call the init function... if it exists.
-					qcvm->worldmodel = cl.worldmodel;
-					SV_ClearWorld();
-					if (qcvm->extfuncs.CSQC_Init)
-					{
-						G_FLOAT(OFS_PARM0) = 0;
-						G_INT(OFS_PARM1) = PR_SetEngineString("QuakeSpasm-Spiked");
-						G_FLOAT(OFS_PARM2) = QUAKESPASM_VERSION;
-						PR_ExecuteProgram(qcvm->extfuncs.CSQC_Init);
-					}
-				}
-				else
-					PR_ClearProgs(qcvm);
-				PR_SwitchQCVM(NULL);
-			}
+			CL_LoadCSProgs();
 
 			cl.sendprespawn = false;
 			MSG_WriteByte (&cls.message, clc_stringcmd);
@@ -847,6 +918,14 @@ void _Host_Frame (double time)
 		Cbuf_Waited();
 	}
 
+	if (cl.qcvm.progs)
+	{
+		PR_SwitchQCVM(&cl.qcvm);
+		pr_global_struct->frametime = host_frametime;
+		SV_Physics();
+		PR_SwitchQCVM(NULL);
+	}
+
 // fetch results from server
 	if (cls.state == ca_connected)
 		CL_ReadFromServer ();
@@ -864,13 +943,16 @@ void _Host_Frame (double time)
 
 // update audio
 	BGM_Update();	// adds music raw samples and/or advances midi driver
-	if (cls.signon == SIGNONS)
+	if (cl.listener_defined)
 	{
-		S_Update (r_origin, vpn, vright, vup);
-		CL_DecayLights ();
+		cl.listener_defined = false;
+		S_Update (cl.listener_origin, cl.listener_axis[0], cl.listener_axis[1], cl.listener_axis[2]);
 	}
+	else if (cls.signon == SIGNONS)
+		S_Update (r_origin, vpn, vright, vup);
 	else
 		S_Update (vec3_origin, vec3_origin, vec3_origin, vec3_origin);
+	CL_DecayLights ();
 
 	CDAudio_Update();
 

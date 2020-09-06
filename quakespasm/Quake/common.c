@@ -644,6 +644,156 @@ int wildcmp(const char *wild, const char *string)
 	return !*wild;
 }
 
+void Info_RemoveKey(char *info, const char *key)
+{	//only shrinks, so no need for max size.
+	size_t keylen = strlen(key);
+
+	while(*info)
+	{
+		char *l = info;
+		if (*info++ != '\\')
+			break;	//error / end-of-string
+
+		if (!strncmp(info, key, keylen) && info[keylen] == '\\')
+		{
+			//skip the key name
+			info += keylen+1;
+			//this is the old value for the key. skip over it
+			while (*info && *info != '\\')
+				info++;
+
+			//okay, we found it. strip it out now.
+			memmove(l, info, strlen(info)+1);
+			return;
+		}
+		else
+		{
+			//skip the key
+			while (*info && *info != '\\')
+				info++;
+
+			//validate that its a value now
+			if (*info++ != '\\')
+				break;	//error
+			//skip the value
+			while (*info && *info != '\\')
+				info++;
+		}
+	}
+}
+void Info_SetKey(char *info, size_t infosize, const char *key, const char *val)
+{
+	size_t keylen = strlen(key);
+	size_t vallen = strlen(val);
+
+	Info_RemoveKey(info, key);
+
+	if (vallen)
+	{
+		char *o = info + strlen(info);
+		char *e = info + infosize-1;
+
+		if (!*key || strchr(key, '\\') || strchr(val, '\\'))
+			Con_Warning("Info_SetKey(%s): invalid key/value\n", key);
+		else if (o + 2 + keylen + vallen >= e)
+			Con_Warning("Info_SetKey(%s): length exceeds max\n", key);
+		else
+		{
+			*o++ = '\\';
+			memcpy(o, key, keylen);
+			o += keylen;
+			*o++ = '\\';
+			memcpy(o, val, vallen);
+			o += vallen;
+
+			*o = 0;
+		}
+	}
+}
+const char *Info_GetKey(const char *info, const char *key, char *out, size_t outsize)
+{
+	const char *r = out;
+	size_t keylen = strlen(key);
+
+	outsize--;
+
+	while(*info)
+	{
+		if (*info++ != '\\')
+			break;	//error / end-of-string
+
+		if (!strncmp(info, key, keylen) && info[keylen] == '\\')
+		{
+			//skip the key name
+			info += keylen+1;
+			//this is the value for the key. copy it out
+			while (*info && *info != '\\' && outsize-->0)
+				*out++ = *info++;
+			break;
+		}
+		else
+		{
+			//skip the key
+			while (*info && *info != '\\')
+				info++;
+
+			//validate that its a value now
+			if (*info++ != '\\')
+				break;	//error
+			//skip the value
+			while (*info && *info != '\\')
+				info++;
+		}
+	}
+	*out = 0;
+	return r;
+}
+
+void Info_Enumerate(const char *info, void(*cb)(void *ctx, const char *key, const char *value), void *cbctx)
+{
+	char key[1024];
+	char val[1024];
+	size_t kl, vl;
+	while(*info)
+	{
+		kl=vl=0;
+		if (*info++ != '\\')
+			break;	//error / end-of-string
+
+		//skip the key
+		while (*info && *info != '\\')
+		{
+			if (kl < sizeof(key)-1)
+				key[kl++] = *info;
+			info++;
+		}
+
+		//validate that its a value now
+		if (*info++ != '\\')
+			break;	//error
+		//skip the value
+		while (*info && *info != '\\')
+		{
+			if (vl < sizeof(val)-1)
+				val[vl++] = *info;
+			info++;
+		}
+
+		key[kl] = 0;
+		val[vl] = 0;
+		cb(cbctx, key, val);
+	}
+}
+static void Info_Print_Callback(void *ctx, const char *key, const char *val)
+{
+	Con_Printf("%20s: %s\n", key, val);
+}
+void Info_Print(const char *info)
+{
+	Info_Enumerate(info, Info_Print_Callback, NULL);
+}
+
+
 /*
 ============================================================================
 
@@ -2366,9 +2516,11 @@ static void COM_ListFiles(void *ctx, searchpath_t *spath, const char *pattern, q
 	}
 #endif
 }
-void COM_ListAllFiles(void *ctx, const char *pattern, qboolean (*cb)(void *ctx, const char *fname, time_t mtime, size_t fsize, searchpath_t *spath))
+void COM_ListAllFiles(void *ctx, const char *pattern, qboolean (*cb)(void *ctx, const char *fname, time_t mtime, size_t fsize, searchpath_t *spath), unsigned int flags, const char *pkgfilter)
 {
 	searchpath_t *search;
+	const char *sp;
+	qboolean foundpackage = false;
 
 	if (*pattern == '/' || strchr(pattern, ':')	//block absolute paths
 		|| strchr(pattern, '\\')	//block unportable paths (also ones that mess up other checks)
@@ -2381,6 +2533,23 @@ void COM_ListAllFiles(void *ctx, const char *pattern, qboolean (*cb)(void *ctx, 
 	//don't add the same pak twice.
 	for (search = com_searchpaths; search; search = search->next)
 	{
+		if (pkgfilter)
+		{
+			if (flags & (1u<<1))
+				sp = search->purename;
+			else
+			{
+				sp = strchr(search->purename, '/');
+				if (sp && !strchr(++sp, '/'))
+					;
+				else
+					continue;	//ignore packages inside other packages. they're just too weird.
+			}
+			if (strcmp(pkgfilter, sp))
+				continue;	//ignore this package
+		}
+		foundpackage = true;
+
 		if (search->pack)
 		{
 			pack_t *pak = search->pack;
@@ -2396,9 +2565,16 @@ void COM_ListAllFiles(void *ctx, const char *pattern, qboolean (*cb)(void *ctx, 
 			COM_ListFiles(ctx, search, pattern, cb);
 		}
 	}
+
+	if (flags & (1u<<1) && (flags & (1u<<2)) && pkgfilter && foundpackage)
+	{	//if we're using full package paths, and we're trying to force the search, then be prepared to search gamedirs which are not currently active too if we didn't already search it.
+//		searchpath_t dummy;
+//		dummy.filename =
+		Con_Printf("search_begin: SB_FORCESEARCH not supported\n");
+	}
 }
 
-static qboolean COM_AddPackage(searchpath_t *basepath, const char *pakfile)
+static qboolean COM_AddPackage(searchpath_t *basepath, const char *pakfile, const char *purename)
 {
 	searchpath_t *search;
 	pack_t *pak;
@@ -2433,6 +2609,8 @@ static qboolean COM_AddPackage(searchpath_t *basepath, const char *pakfile)
 	}
 
 	search = (searchpath_t *) Z_Malloc(sizeof(searchpath_t));
+	q_strlcpy(search->filename, pakfile, sizeof(search->filename));
+	q_strlcpy(search->purename, purename, sizeof(search->purename));
 	search->path_id = basepath->path_id;
 	search->pack = pak;
 	search->next = com_searchpaths;
@@ -2445,8 +2623,10 @@ static qboolean COM_AddEnumeratedPackage(void *ctx, const char *pakfile)
 {
 	searchpath_t *basepath = ctx;
 	char fullpakfile[MAX_OSPATH];
+	char purepakfile[MAX_OSPATH];
 	q_snprintf (fullpakfile, sizeof(fullpakfile), "%s/%s", basepath->filename, pakfile);
-	return COM_AddPackage(basepath, fullpakfile);
+	q_snprintf (purepakfile, sizeof(purepakfile), "%s/%s", basepath->purename, pakfile);
+	return COM_AddPackage(basepath, fullpakfile, purepakfile);
 }
 
 const char *COM_GetGameNames(qboolean full)
@@ -2512,6 +2692,7 @@ static void COM_AddGameDirectory (const char *dir)
 	unsigned int path_id;
 	searchpath_t *searchdir;
 	char pakfile[MAX_OSPATH];
+	char purename[MAX_OSPATH];
 	qboolean been_here = false;
 	FILE *listing;
 	qboolean found;
@@ -2549,6 +2730,7 @@ _add_path:
 	searchdir = (searchpath_t *) Z_Malloc(sizeof(searchpath_t));
 	searchdir->path_id = path_id;
 	q_strlcpy (searchdir->filename, com_gamedir, sizeof(searchdir->filename));
+	q_strlcpy (searchdir->purename, dir, sizeof(searchdir->purename));
 
 	q_snprintf (pakfile, sizeof(pakfile), "%s/pak.lst", com_gamedir);
 	listing = fopen(pakfile, "rb");
@@ -2574,14 +2756,16 @@ _add_path:
 			if (strchr(com_token, '/') || strchr(com_token, '\\') || strchr(com_token, ':'))
 				continue;
 			q_snprintf (pakfile, sizeof(pakfile), "%s/%s", com_gamedir, com_token);
-			COM_AddPackage(searchdir, pakfile);
+			q_snprintf (purename, sizeof(purename), "%s/%s", dir, com_token);
+			COM_AddPackage(searchdir, pakfile, purename);
 
 			if (path_id == 1 && !fitzmode && !q_strncasecmp(com_token, "pak0.", 5))
 			{	//add this now, to try to retain correct ordering.
 				qboolean old = com_modified;
 				if (been_here) base = host_parms->userdir;
 				q_snprintf (pakfile, sizeof(pakfile), "%s/%s.%s", base, enginepackname, COM_FileGetExtension(com_token));
-				COM_AddPackage(searchdir, pakfile);
+				q_snprintf (purename, sizeof(purename), "%s.%s", enginepackname, COM_FileGetExtension(com_token));
+				COM_AddPackage(searchdir, pakfile, purename);
 				com_modified = old;
 			}
 		}
@@ -2593,9 +2777,11 @@ _add_path:
 		found = false;
 
 		q_snprintf (pakfile, sizeof(pakfile), "%s/pak%i.pak", com_gamedir, i);
-		found |= COM_AddPackage(searchdir, pakfile);
+		q_snprintf (purename, sizeof(purename), "%s/pak%i.pak", dir, i);
+		found |= COM_AddPackage(searchdir, pakfile, purename);
 		q_snprintf (pakfile, sizeof(pakfile), "%s/pak%i.pk3", com_gamedir, i);
-		found |= COM_AddPackage(searchdir, pakfile);
+		q_snprintf (purename, sizeof(purename), "%s/pak%i.pk3", dir, i);
+		found |= COM_AddPackage(searchdir, pakfile, purename);
 
 		if (i == 0 && path_id == 1 && !fitzmode)
 		{
@@ -2603,9 +2789,11 @@ _add_path:
 			if (been_here) base = host_parms->userdir;
 
 			q_snprintf (pakfile, sizeof(pakfile), "%s/%s.pak", base, enginepackname);
-			COM_AddPackage(searchdir, pakfile);
+			q_snprintf (purename, sizeof(purename), "%s.pak", enginepackname);
+			COM_AddPackage(searchdir, pakfile, purename);
 			q_snprintf (pakfile, sizeof(pakfile), "%s/%s.pk3", base, enginepackname);
-			COM_AddPackage(searchdir, pakfile);
+			q_snprintf (purename, sizeof(purename), "%s.pk3", enginepackname);
+			COM_AddPackage(searchdir, pakfile, purename);
 
 			com_modified = old;
 		}

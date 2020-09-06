@@ -41,6 +41,8 @@ typedef struct
 	int		colors;			// two 4 bit fields
 	int		ping;
 	byte	translations[VID_GRADES*256];
+
+	char	userinfo[8192];
 } scoreboard_t;
 
 typedef struct
@@ -145,6 +147,7 @@ typedef struct
 		float	starttime;
 	} download;
 
+	char userinfo[8192];
 //Spike -- menuqc stuff.
 	qcvm_t menu_qcvm;
 } client_static_t;
@@ -161,7 +164,9 @@ typedef struct
 								// throw out the first couple, so the player
 								// doesn't accidentally do something the
 								// first frame
-	usercmd_t	cmd;			// last command sent to the server
+	int			ackedmovemessages;	// echo of movemessages from the server.
+	usercmd_t	movecmds[64];	// ringbuffer of previous movement commands (journal for prediction)
+#define MOVECMDS_MASK (countof(cl.movecmds)-1)
 	usercmd_t	pendingcmd;		// accumulated state from mice+joysticks.
 
 // information for local display
@@ -218,6 +223,7 @@ typedef struct
 // information that is static for the entire time connected to a server
 //
 	struct qmodel_s		*model_precache[MAX_MODELS];
+	struct qmodel_s		*model_precache_csqc[MAX_MODELS];
 	struct sfx_s		*sound_precache[MAX_SOUNDS];
 
 	char		mapname[128];
@@ -249,6 +255,7 @@ typedef struct
 
 	unsigned	protocol; //johnfitz
 	unsigned	protocolflags;
+	unsigned	protocol_pext1;	//spike -- flag of fte protocol extensions
 	unsigned	protocol_pext2;	//spike -- flag of fte protocol extensions
 	qboolean	protocol_dpdownload;
 
@@ -270,6 +277,7 @@ typedef struct
 	qboolean requestresend;
 
 	char stuffcmdbuf[1024];	//comment-extensions are a thing with certain servers, make sure we can handle them properly without further hacks/breakages. there's also some server->client only console commands that we might as well try to handle a bit better, like reconnect
+	char printbuffer[1024];
 	enum
 	{
 		PRINT_NONE,
@@ -287,6 +295,7 @@ typedef struct
 	int		model_count;
 	int		model_download;
 	char	model_name[MAX_MODELS][MAX_QPATH];
+	char	model_name_csqc[MAX_MODELS][MAX_QPATH];	//negative indexes in the csqc are csqc ones.
 	int		sound_count;
 	int		sound_download;
 	char	sound_name[MAX_SOUNDS][MAX_QPATH];
@@ -294,6 +303,14 @@ typedef struct
 
 	qcvm_t	qcvm;	//for csqc.
 	float	csqc_sensitivity;	//scaler for sensitivity
+	size_t	ssqc_to_csqc_max;
+	edict_t **ssqc_to_csqc;		//to find the csqc ent for an ssqc index.
+
+	qboolean	listener_defined;
+	vec3_t		listener_origin;
+	vec3_t		listener_axis[3];
+
+	char serverinfo[8192];	// \key\value infostring data.
 } client_state_t;
 
 
@@ -301,7 +318,7 @@ typedef struct
 // cvars
 //
 extern	cvar_t	cl_name;
-extern	cvar_t	cl_color;
+extern	cvar_t	cl_topcolor, cl_bottomcolor;
 
 extern	cvar_t	cl_upspeed;
 extern	cvar_t	cl_forwardspeed;
@@ -369,6 +386,8 @@ void CL_Disconnect (void);
 void CL_Disconnect_f (void);
 void CL_NextDemo (void);
 
+void SV_UpdateInfo(int edict, const char *keyname, const char *value);
+
 //
 // cl_input
 //
@@ -389,11 +408,13 @@ void CL_SendMove (const usercmd_t *cmd);
 int  CL_ReadFromServer (void);
 void CL_AdjustAngles (void);
 void CL_BaseMove (usercmd_t *cmd);
+void CL_FinishMove(usercmd_t *cmd);
 
 void CL_Download_Data(void);
 qboolean CL_CheckDownloads(void);
 
 void CL_ParseEffect (qboolean big);
+void CL_UpdateBeam (struct qmodel_s *m, const char *trailname, const char *impactname, int ent, float *start, float *end);
 void CL_ParseTEnt (void);
 void CL_UpdateTEnts (void);
 

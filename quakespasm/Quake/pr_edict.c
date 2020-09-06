@@ -946,10 +946,13 @@ const char *ED_ParseEdict (const char *data, edict_t *ent)
 		if (keyname[0] == '_')
 		{
 			//spike -- hacks to support func_illusionary with all sorts of mdls, and various particle effects
-			if (!strcmp(keyname, "_precache_model") && sv.state == ss_loading)
-				SV_Precache_Model(PR_GetString(ED_NewString(com_token)));
-			else if (!strcmp(keyname, "_precache_sound") && sv.state == ss_loading)
-				SV_Precache_Sound(PR_GetString(ED_NewString(com_token)));
+			if (qcvm == &sv.qcvm)
+			{
+				if (!strcmp(keyname, "_precache_model") && sv.state == ss_loading)
+					SV_Precache_Model(PR_GetString(ED_NewString(com_token)));
+				else if (!strcmp(keyname, "_precache_sound") && sv.state == ss_loading)
+					SV_Precache_Sound(PR_GetString(ED_NewString(com_token)));
+			}
 			//spike
 			continue;
 		}
@@ -960,7 +963,7 @@ const char *ED_ParseEdict (const char *data, edict_t *ent)
 		//johnfitz
 
 		//spike -- hacks to support func_illusionary/info_notnull with all sorts of mdls, and various particle effects
-		if (!strcmp(keyname, "modelindex") && sv.state == ss_loading)
+		if (!strcmp(keyname, "modelindex") && qcvm == &sv.qcvm && sv.state == ss_loading)
 		{
 			//"model" "progs/foobar.mdl"
 			//"modelindex" "progs/foobar.mdl"
@@ -978,12 +981,12 @@ const char *ED_ParseEdict (const char *data, edict_t *ent)
 		{
 #ifdef PSET_SCRIPT
 			eval_t *val;
-			if (!strcmp(keyname, "traileffect") && sv.state == ss_loading)
+			if (!strcmp(keyname, "traileffect") && qcvm == &sv.qcvm && sv.state == ss_loading)
 			{
 				if ((val = GetEdictFieldValue(ent, qcvm->extfields.traileffectnum)))
 					val->_float = PF_SV_ForceParticlePrecache(com_token);
 			}
-			else if (!strcmp(keyname, "emiteffect") && sv.state == ss_loading)
+			else if (!strcmp(keyname, "emiteffect") && qcvm == &sv.qcvm && sv.state == ss_loading)
 			{
 				if ((val = GetEdictFieldValue(ent, qcvm->extfields.emiteffectnum)))
 					val->_float = PF_SV_ForceParticlePrecache(com_token);
@@ -1003,7 +1006,7 @@ const char *ED_ParseEdict (const char *data, edict_t *ent)
 			sprintf (com_token, "0 %s 0", temp);
 		}
 
-		if (!ED_ParseEpair ((void *)&ent->v, key, com_token, false))
+		if (!ED_ParseEpair ((void *)&ent->v, key, com_token, qcvm != &sv.qcvm))
 			Host_Error ("ED_ParseEdict: parse error");
 	}
 
@@ -1167,9 +1170,11 @@ qboolean PR_LoadProgs (const char *filename, qboolean fatal, unsigned int needcr
 	if (!qcvm->progs)
 		return false;
 
-	CRC_Init (&qcvm->crc);
+	qcvm->progssize = com_filesize;
+	CRC_Init (&qcvm->progscrc);
 	for (i = 0; i < com_filesize; i++)
-		CRC_ProcessByte (&qcvm->crc, ((byte *)qcvm->progs)[i]);
+		CRC_ProcessByte (&qcvm->progscrc, ((byte *)qcvm->progs)[i]);
+	qcvm->progshash = Com_BlockChecksum(qcvm->progs, com_filesize);
 
 	// byte swap the header
 	for (i = 0; i < (int) sizeof(*qcvm->progs) / 4; i++)
@@ -1284,26 +1289,13 @@ qboolean PR_LoadProgs (const char *filename, qboolean fatal, unsigned int needcr
 	qcvm->numbuiltins = numbuiltins;
 
 	//spike: detect extended fields from progs
-	qcvm->extfields.items2 = ED_FindFieldOffset("items2");
-	qcvm->extfields.gravity = ED_FindFieldOffset("gravity");
-	qcvm->extfields.alpha = ED_FindFieldOffset("alpha");
-	qcvm->extfields.movement = ED_FindFieldOffset("movement");
-	qcvm->extfields.traileffectnum = ED_FindFieldOffset("traileffectnum");
-	qcvm->extfields.emiteffectnum = ED_FindFieldOffset("emiteffectnum");
-	qcvm->extfields.viewmodelforclient = ED_FindFieldOffset("viewmodelforclient");
-	qcvm->extfields.exteriormodeltoclient = ED_FindFieldOffset("exteriormodeltoclient");
-	qcvm->extfields.scale = ED_FindFieldOffset("scale");
-	qcvm->extfields.colormod = ED_FindFieldOffset("colormod");
-	qcvm->extfields.tag_entity = ED_FindFieldOffset("tag_entity");
-	qcvm->extfields.tag_index = ED_FindFieldOffset("tag_index");
-	qcvm->extfields.button3 = ED_FindFieldOffset("button3");
-	qcvm->extfields.button4 = ED_FindFieldOffset("button4");
-	qcvm->extfields.button5 = ED_FindFieldOffset("button5");
-	qcvm->extfields.button6 = ED_FindFieldOffset("button6");
-	qcvm->extfields.button7 = ED_FindFieldOffset("button7");
-	qcvm->extfields.button8 = ED_FindFieldOffset("button8");
-	qcvm->extfields.viewzoom = ED_FindFieldOffset("viewzoom");
-	qcvm->extfields.modelflags = ED_FindFieldOffset("modelflags");
+#define QCEXTFIELD(n,t) qcvm->extfields.n = ED_FindFieldOffset(#n);
+	QCEXTFIELDS_ALL
+	QCEXTFIELDS_GAME
+	QCEXTFIELDS_CL
+	QCEXTFIELDS_CS
+	QCEXTFIELDS_SS
+#undef QCEXTFIELD
 
 	i = qcvm->progs->entityfields;
 	if (qcvm->extfields.emiteffectnum < 0)

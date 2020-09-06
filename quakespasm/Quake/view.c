@@ -201,7 +201,7 @@ void V_DriftPitch (void)
 // don't count small mouse motion
 	if (cl.nodrift)
 	{
-		if ( fabs(cl.cmd.forwardmove) < cl_forwardspeed.value)
+		if ( fabs(cl.movecmds[(cl.movemessages-1)&MOVECMDS_MASK].forwardmove) < cl_forwardspeed.value)
 			cl.driftmove = 0;
 		else
 			cl.driftmove += host_frametime;
@@ -857,7 +857,7 @@ void V_CalcRefdef (void)
 
 	view->model = cl.model_precache[cl.stats[STAT_WEAPON]];
 	view->frame = cl.stats[STAT_WEAPONFRAME];
-	view->colormap = vid.colormap;
+	view->netstate.colormap = 0;
 
 //johnfitz -- v_gunkick
 	if (v_gunkick.value == 1) //original quake kick

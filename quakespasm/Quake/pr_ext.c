@@ -27,7 +27,18 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "quakedef.h"
 #include "q_ctype.h"
 
-#define countof(x) (sizeof(x)/sizeof((x)[0]))
+static float PR_GetVMScale(void)
+{	//sigh, this is horrible (divides glwidth)
+	float s;
+	if (qcvm == &cls.menu_qcvm)
+	{
+		s = q_min((float)glwidth / 320.0, (float)glheight / 200.0);
+		s = CLAMP (1.0, scr_menuscale.value, s);
+	}
+	else
+		s = CLAMP (1.0, scr_sbarscale.value, (float)glwidth / 320.0);
+	return s;
+}
 
 //there's a few different aproaches to tempstrings...
 //the lame way is to just have a single one (vanilla).
@@ -2177,16 +2188,9 @@ static void PF_setcolors(void)
 		Con_Printf ("tried to setcolor a non-client\n");
 		return;
 	}
-	//FIXME: should we allow this for inactive players?
 
-//update it
-	svs.clients[i].colors = newcol;
-	svs.clients[i].edict->v.team = (newcol&15) + 1;
-
-// send notification to all clients
-	MSG_WriteByte (&sv.reliable_datagram, svc_updatecolors);
-	MSG_WriteByte (&sv.reliable_datagram, i);
-	MSG_WriteByte (&sv.reliable_datagram, newcol);
+	SV_UpdateInfo(i+1, "topcolor",    va("%i", (newcol>>4)&0xf));
+	SV_UpdateInfo(i+1, "bottomcolor", va("%i", (newcol>>0)&0xf));
 }
 static void PF_clientcommand(void)
 {
@@ -2372,6 +2376,25 @@ static void PF_sv_te_spike(void)
 	MSG_WriteCoord(&sv.datagram, org[2], sv.protocolflags);
 	SV_Multicast(MULTICAST_PVS_U, org, 0, 0);
 }
+static void PF_cl_te_spike(void)
+{
+	float *pos = G_VECTOR(OFS_PARM0);
+
+	if (PScript_RunParticleEffectTypeString(pos, NULL, 1, "TE_SPIKE"))
+		R_RunParticleEffect (pos, vec3_origin, 0, 10);
+	if ( rand() % 5 )
+		S_StartSound (-1, 0, S_PrecacheSound ("weapons/tink1.wav"), pos, 1, 1);
+	else
+	{
+		int rnd = rand() & 3;
+		if (rnd == 1)
+			S_StartSound (-1, 0, S_PrecacheSound ("weapons/ric1.wav"), pos, 1, 1);
+		else if (rnd == 2)
+			S_StartSound (-1, 0, S_PrecacheSound ("weapons/ric2.wav"), pos, 1, 1);
+		else
+			S_StartSound (-1, 0, S_PrecacheSound ("weapons/ric3.wav"), pos, 1, 1);
+	}
+}
 static void PF_sv_te_superspike(void)
 {
 	float *org = G_VECTOR(OFS_PARM0);
@@ -2381,6 +2404,26 @@ static void PF_sv_te_superspike(void)
 	MSG_WriteCoord(&sv.datagram, org[1], sv.protocolflags);
 	MSG_WriteCoord(&sv.datagram, org[2], sv.protocolflags);
 	SV_Multicast(MULTICAST_PVS_U, org, 0, 0);
+}
+static void PF_cl_te_superspike(void)
+{
+	float *pos = G_VECTOR(OFS_PARM0);
+
+	if (PScript_RunParticleEffectTypeString(pos, NULL, 1, "TE_SUPERSPIKE"))
+		R_RunParticleEffect (pos, vec3_origin, 0, 20);
+
+	if ( rand() % 5 )
+		S_StartSound (-1, 0, S_PrecacheSound ("weapons/tink1.wav"), pos, 1, 1);
+	else
+	{
+		int rnd = rand() & 3;
+		if (rnd == 1)
+			S_StartSound (-1, 0, S_PrecacheSound ("weapons/ric1.wav"), pos, 1, 1);
+		else if (rnd == 2)
+			S_StartSound (-1, 0, S_PrecacheSound ("weapons/ric2.wav"), pos, 1, 1);
+		else
+			S_StartSound (-1, 0, S_PrecacheSound ("weapons/ric3.wav"), pos, 1, 1);
+	}
 }
 static void PF_sv_te_gunshot(void)
 {
@@ -2393,6 +2436,14 @@ static void PF_sv_te_gunshot(void)
 	MSG_WriteCoord(&sv.datagram, org[2], sv.protocolflags);
 	SV_Multicast(MULTICAST_PVS_U, org, 0, 0);
 }
+static void PF_cl_te_gunshot(void)
+{
+	float *pos = G_VECTOR(OFS_PARM0);
+
+	int rnd = 20;
+	if (PScript_RunParticleEffectTypeString(pos, NULL, rnd, "TE_GUNSHOT"))
+		R_RunParticleEffect (pos, vec3_origin, 0, rnd);
+}
 static void PF_sv_te_explosion(void)
 {
 	float *org = G_VECTOR(OFS_PARM0);
@@ -2403,6 +2454,20 @@ static void PF_sv_te_explosion(void)
 	MSG_WriteCoord(&sv.datagram, org[2], sv.protocolflags);
 	SV_Multicast(MULTICAST_PHS_U, org, 0, 0);
 }
+static void PF_cl_te_explosion(void)
+{
+	float *pos = G_VECTOR(OFS_PARM0);
+
+	dlight_t *dl;
+	if (PScript_RunParticleEffectTypeString(pos, NULL, 1, "TE_EXPLOSION"))
+		R_ParticleExplosion (pos);
+	dl = CL_AllocDlight (0);
+	VectorCopy (pos, dl->origin);
+	dl->radius = 350;
+	dl->die = cl.time + 0.5;
+	dl->decay = 300;
+	S_StartSound (-1, 0, S_PrecacheSound ("weapons/r_exp3.wav"), pos, 1, 1);
+}
 static void PF_sv_te_tarexplosion(void)
 {
 	float *org = G_VECTOR(OFS_PARM0);
@@ -2412,6 +2477,14 @@ static void PF_sv_te_tarexplosion(void)
 	MSG_WriteCoord(&sv.datagram, org[1], sv.protocolflags);
 	MSG_WriteCoord(&sv.datagram, org[2], sv.protocolflags);
 	SV_Multicast(MULTICAST_PHS_U, org, 0, 0);
+}
+static void PF_cl_te_tarexplosion(void)
+{
+	float *pos = G_VECTOR(OFS_PARM0);
+
+	if (PScript_RunParticleEffectTypeString(pos, NULL, 1, "TE_TAREXPLOSION"))
+		R_BlobExplosion (pos);
+	S_StartSound (-1, 0, S_PrecacheSound ("weapons/r_exp3.wav"), pos, 1, 1);
 }
 static void PF_sv_te_lightning1(void)
 {
@@ -2429,6 +2502,14 @@ static void PF_sv_te_lightning1(void)
 	MSG_WriteCoord(&sv.datagram, end[2], sv.protocolflags);
 	SV_Multicast(MULTICAST_PHS_U, start, 0, 0);
 }
+static void PF_cl_te_lightning1(void)
+{
+	edict_t *ed = G_EDICT(OFS_PARM0);
+	float *start = G_VECTOR(OFS_PARM1);
+	float *end = G_VECTOR(OFS_PARM2);
+
+	CL_UpdateBeam (Mod_ForName("progs/bolt.mdl", true), "TE_LIGHTNING1", "TE_LIGHTNING1_END", -NUM_FOR_EDICT(ed), start, end);
+}
 static void PF_sv_te_lightning2(void)
 {
 	edict_t *ed = G_EDICT(OFS_PARM0);
@@ -2445,6 +2526,14 @@ static void PF_sv_te_lightning2(void)
 	MSG_WriteCoord(&sv.datagram, end[2], sv.protocolflags);
 	SV_Multicast(MULTICAST_PHS_U, start, 0, 0);
 }
+static void PF_cl_te_lightning2(void)
+{
+	edict_t *ed = G_EDICT(OFS_PARM0);
+	float *start = G_VECTOR(OFS_PARM1);
+	float *end = G_VECTOR(OFS_PARM2);
+
+	CL_UpdateBeam (Mod_ForName("progs/bolt2.mdl", true), "TE_LIGHTNING2", "TE_LIGHTNING2_END", -NUM_FOR_EDICT(ed), start, end);
+}
 static void PF_sv_te_wizspike(void)
 {
 	float *org = G_VECTOR(OFS_PARM0);
@@ -2455,6 +2544,14 @@ static void PF_sv_te_wizspike(void)
 	MSG_WriteCoord(&sv.datagram, org[2], sv.protocolflags);
 	SV_Multicast(MULTICAST_PHS_U, org, 0, 0);
 }
+static void PF_cl_te_wizspike(void)
+{
+	float *pos = G_VECTOR(OFS_PARM0);
+
+	if (PScript_RunParticleEffectTypeString(pos, NULL, 1, "TE_WIZSPIKE"))
+		R_RunParticleEffect (pos, vec3_origin, 20, 30);
+	S_StartSound (-1, 0, S_PrecacheSound ("wizard/hit.wav"), pos, 1, 1);
+}
 static void PF_sv_te_knightspike(void)
 {
 	float *org = G_VECTOR(OFS_PARM0);
@@ -2464,6 +2561,14 @@ static void PF_sv_te_knightspike(void)
 	MSG_WriteCoord(&sv.datagram, org[1], sv.protocolflags);
 	MSG_WriteCoord(&sv.datagram, org[2], sv.protocolflags);
 	SV_Multicast(MULTICAST_PHS_U, org, 0, 0);
+}
+static void PF_cl_te_knightspike(void)
+{
+	float *pos = G_VECTOR(OFS_PARM0);
+
+	if (PScript_RunParticleEffectTypeString(pos, NULL, 1, "TE_KNIGHTSPIKE"))
+		R_RunParticleEffect (pos, vec3_origin, 226, 20);
+	S_StartSound (-1, 0, S_PrecacheSound ("hknight/hit.wav"), pos, 1, 1);
 }
 static void PF_sv_te_lightning3(void)
 {
@@ -2481,6 +2586,14 @@ static void PF_sv_te_lightning3(void)
 	MSG_WriteCoord(&sv.datagram, end[2], sv.protocolflags);
 	SV_Multicast(MULTICAST_PHS_U, start, 0, 0);
 }
+static void PF_cl_te_lightning3(void)
+{
+	edict_t *ed = G_EDICT(OFS_PARM0);
+	float *start = G_VECTOR(OFS_PARM1);
+	float *end = G_VECTOR(OFS_PARM2);
+
+	CL_UpdateBeam (Mod_ForName("progs/bolt3.mdl", true), "TE_LIGHTNING3", "TE_LIGHTNING3_END", -NUM_FOR_EDICT(ed), start, end);
+}
 static void PF_sv_te_lavasplash(void)
 {
 	float *org = G_VECTOR(OFS_PARM0);
@@ -2491,6 +2604,13 @@ static void PF_sv_te_lavasplash(void)
 	MSG_WriteCoord(&sv.datagram, org[2], sv.protocolflags);
 	SV_Multicast(MULTICAST_PHS_U, org, 0, 0);
 }
+static void PF_cl_te_lavasplash(void)
+{
+	float *pos = G_VECTOR(OFS_PARM0);
+
+	if (PScript_RunParticleEffectTypeString(pos, NULL, 1, "TE_LAVASPLASH"))
+		R_LavaSplash (pos);
+}
 static void PF_sv_te_teleport(void)
 {
 	float *org = G_VECTOR(OFS_PARM0);
@@ -2500,6 +2620,12 @@ static void PF_sv_te_teleport(void)
 	MSG_WriteCoord(&sv.multicast, org[1], sv.protocolflags);
 	MSG_WriteCoord(&sv.multicast, org[2], sv.protocolflags);
 	SV_Multicast(MULTICAST_PHS_U, org, 0, 0);
+}
+static void PF_cl_te_teleport(void)
+{
+	float *pos = G_VECTOR(OFS_PARM0);
+	if (PScript_RunParticleEffectTypeString(pos, NULL, 1, "TE_TELEPORT"))
+		R_TeleportSplash (pos);
 }
 static void PF_sv_te_explosion2(void)
 {
@@ -2514,6 +2640,22 @@ static void PF_sv_te_explosion2(void)
 	MSG_WriteByte(&sv.multicast, palstart);
 	MSG_WriteByte(&sv.multicast, palcount);
 	SV_Multicast(MULTICAST_PHS_U, org, 0, 0);
+}
+static void PF_cl_te_explosion2(void)
+{
+	float *pos = G_VECTOR(OFS_PARM0);
+	int colorStart = G_FLOAT(OFS_PARM1);
+	int colorLength = G_FLOAT(OFS_PARM1);
+	dlight_t *dl;
+
+	if (PScript_RunParticleEffectTypeString(pos, NULL, 1, va("TE_EXPLOSION2_%i_%i", colorStart, colorLength)))
+		R_ParticleExplosion2 (pos, colorStart, colorLength);
+	dl = CL_AllocDlight (0);
+	VectorCopy (pos, dl->origin);
+	dl->radius = 350;
+	dl->die = cl.time + 0.5;
+	dl->decay = 300;
+	S_StartSound (-1, 0, S_PrecacheSound ("weapons/r_exp3.wav"), pos, 1, 1);
 }
 static void PF_sv_te_beam(void)
 {
@@ -2530,6 +2672,14 @@ static void PF_sv_te_beam(void)
 	MSG_WriteCoord(&sv.multicast, end[1], sv.protocolflags);
 	MSG_WriteCoord(&sv.multicast, end[2], sv.protocolflags);
 	SV_Multicast(MULTICAST_PHS_U, start, 0, 0);
+}
+static void PF_cl_te_beam(void)
+{
+	edict_t *ed = G_EDICT(OFS_PARM0);
+	float *start = G_VECTOR(OFS_PARM1);
+	float *end = G_VECTOR(OFS_PARM2);
+
+	CL_UpdateBeam (Mod_ForName("progs/beam.mdl", true), "TE_BEAM", "TE_BEAM_END", -NUM_FOR_EDICT(ed), start, end);
 }
 #ifdef PSET_SCRIPT
 static void PF_sv_te_particlerain(void)
@@ -2996,14 +3146,14 @@ static void PF_search_begin(void)
 	const char *pattern = G_STRING(OFS_PARM0);
 	unsigned int flags = G_FLOAT(OFS_PARM1);
 //	qboolaen quiet = !!G_FLOAT(OFS_PARM2);
-//	const char *pkgfilter = G_STRING(OFS_PARM3);
+	const char *pkgfilter = (qcvm->argc>3)?G_STRING(OFS_PARM3):NULL;
 
 	for (i = 0; i < countof(searches); i++)
 	{
 		if (!searches[i].owner)
 		{
 			searches[i].flags = flags;
-			COM_ListAllFiles(&searches[i], pattern, PR_Search_AddFile);
+			COM_ListAllFiles(&searches[i], pattern, PR_Search_AddFile, flags, pkgfilter);
 			if (!searches[i].numfiles)
 				break;
 			searches[i].owner = qcvm;
@@ -3091,28 +3241,12 @@ static void PF_search_getpackagename(void)
 	{
 		if (searches[handle].flags & 2)
 		{	//gamedir/packagename. not necessarily fopenable.
-			if (spath->pack)
-			{
-				const char *pathname = spath->pack->filename;
-				const char *last = pathname, *last2 = "";
-				while (*pathname)
-				{
-					if (*pathname == '/')
-					{
-						last2 = last;
-						last = pathname + 1;
-					}
-					pathname++;
-				}
-				G_INT(OFS_RETURN) = PR_MakeTempString(last2);
-			}
-			else
-				G_INT(OFS_RETURN) = PR_MakeTempString(COM_SkipPath(spath->filename));
+			G_INT(OFS_RETURN) = PR_MakeTempString(spath->purename);
 		}
 		else
 		{	//like whichpack thus like frik_file. which sucks.
 			if (spath->pack)
-				G_INT(OFS_RETURN) = PR_MakeTempString(COM_SkipPath(spath->pack->filename));
+				G_INT(OFS_RETURN) = PR_MakeTempString(COM_SkipPath(spath->purename));
 			else
 				G_INT(OFS_RETURN) = 0;
 		}
@@ -3667,12 +3801,16 @@ static void PF_findchain(void)
 	edict_t	*ent, *chain;
 	int	i, f;
 	const char *s, *t;
+	int cfld;
 
 	chain = (edict_t *)qcvm->edicts;
 
 	f = G_INT(OFS_PARM0);
 	s = G_STRING(OFS_PARM1);
-	//FIXME: cfld = G_INT(OFS_PARM2);
+	if (qcvm->argc > 2)
+		cfld = G_INT(OFS_PARM2);
+	else
+		cfld = &ent->v.chain - (int*)&ent->v;
 
 	ent = NEXT_EDICT(qcvm->edicts);
 	for (i = 1; i < qcvm->num_edicts; i++, ent = NEXT_EDICT(ent))
@@ -3682,7 +3820,7 @@ static void PF_findchain(void)
 		t = E_STRING(ent,f);
 		if (strcmp(s, t))
 			continue;
-		ent->v.chain = EDICT_TO_PROG(chain);
+		((int*)&ent->v)[cfld] = EDICT_TO_PROG(chain);
 		chain = ent;
 	}
 
@@ -3719,12 +3857,16 @@ static void PF_findchainfloat(void)
 	edict_t	*ent, *chain;
 	int	i, f;
 	float s, t;
+	int cfld;
 
 	chain = (edict_t *)qcvm->edicts;
 
 	f = G_INT(OFS_PARM0);
 	s = G_FLOAT(OFS_PARM1);
-	//FIXME: cfld = G_INT(OFS_PARM2);
+	if (qcvm->argc > 2)
+		cfld = G_INT(OFS_PARM2);
+	else
+		cfld = &ent->v.chain - (int*)&ent->v;
 
 	ent = NEXT_EDICT(qcvm->edicts);
 	for (i = 1; i < qcvm->num_edicts; i++, ent = NEXT_EDICT(ent))
@@ -3734,7 +3876,7 @@ static void PF_findchainfloat(void)
 		t = E_FLOAT(ent,f);
 		if (s != t)
 			continue;
-		ent->v.chain = EDICT_TO_PROG(chain);
+		((int*)&ent->v)[cfld] = EDICT_TO_PROG(chain);
 		chain = ent;
 	}
 
@@ -3771,12 +3913,16 @@ static void PF_findchainflags(void)
 	edict_t	*ent, *chain;
 	int	i, f;
 	int s, t;
+	int cfld;
 
 	chain = (edict_t *)qcvm->edicts;
 
 	f = G_INT(OFS_PARM0);
 	s = G_FLOAT(OFS_PARM1);
-	//FIXME: cfld = G_INT(OFS_PARM2);
+	if (qcvm->argc > 2)
+		cfld = G_INT(OFS_PARM2);
+	else
+		cfld = &ent->v.chain - (int*)&ent->v;
 
 	ent = NEXT_EDICT(qcvm->edicts);
 	for (i = 1; i < qcvm->num_edicts; i++, ent = NEXT_EDICT(ent))
@@ -3786,7 +3932,7 @@ static void PF_findchainflags(void)
 		t = E_FLOAT(ent,f);
 		if (!(s & t))
 			continue;
-		ent->v.chain = EDICT_TO_PROG(chain);
+		((int*)&ent->v)[cfld] = EDICT_TO_PROG(chain);
 		chain = ent;
 	}
 
@@ -3860,6 +4006,19 @@ static void PF_putentfldstr(void)
 //{
 //fixme;
 //}
+static void PF_writetofile(void)
+{
+	size_t fileid = G_FLOAT(OFS_PARM0) - QC_FILE_BASE;
+	edict_t *ent = G_EDICT(OFS_PARM1);
+
+	G_INT(OFS_RETURN) = 0;
+	if (fileid >= qcfiles_max)
+		Con_Warning("PF_fwrite: invalid file handle\n");
+	else if (!qcfiles[fileid].file)
+		Con_Warning("PF_fwrite: file not open\n");
+	else
+		ED_Write(qcfiles[fileid].file, ent);
+}
 
 static void PF_parseentitydata(void)
 {
@@ -3876,10 +4035,30 @@ static void PF_parseentitydata(void)
 		G_FLOAT(OFS_RETURN) = 0;
 	else
 	{
-		end = ED_ParseEdict(data+offset, ed);
-		G_FLOAT(OFS_RETURN) = end - data;
+		end = COM_Parse(data+offset);
+		if (!strcmp(com_token, "{"))
+		{
+			end = ED_ParseEdict(end, ed);
+			G_FLOAT(OFS_RETURN) = end - data;
+		}
+		else
+			G_FLOAT(OFS_RETURN) = 0;	//doesn't look like an ent to me.
 	}
 }
+/*static void PF_generateentitydata(void)
+{
+	unsigned int fldidx = G_FLOAT(OFS_PARM0);
+	edict_t *ent = G_EDICT(OFS_PARM1);
+	if (fldidx < (unsigned int)qcvm->progs->numfielddefs)
+	{
+		char *ret = PR_GetTempString();
+		const char *val = PR_UglyValueString (qcvm->fielddefs[fldidx].type, (eval_t*)((float*)&ent->v + qcvm->fielddefs[fldidx].ofs));
+		q_strlcpy(ret, val, STRINGTEMP_LENGTH);
+		G_INT(OFS_RETURN) = PR_SetEngineString(ret);
+	}
+	else
+		G_INT(OFS_RETURN) = 0;
+}*/
 static void PF_callfunction(void)
 {
 	dfunction_t *fnc;
@@ -3927,9 +4106,9 @@ static void PF_infokey_internal(qboolean returnfloat)
 	unsigned int ent = G_EDICTNUM(OFS_PARM0);
 	const char *key = G_STRING(OFS_PARM1);
 	const char *r;
-	char buf[64];
+	char buf[1024];
 	if (!ent)
-	{	//nq doesn't really do serverinfo. it just has some cvars.
+	{
 		if (!strcmp(key, "*version"))
 		{
 			q_snprintf(buf, sizeof(buf), ENGINE_NAME_AND_VER);
@@ -3937,25 +4116,23 @@ static void PF_infokey_internal(qboolean returnfloat)
 		}
 		else
 		{
-			cvar_t *var = Cvar_FindVar(key);
-			if (var && (var->flags & CVAR_SERVERINFO))
-				r = var->string;
-			else
+			r = Info_GetKey(svs.serverinfo, key, buf, sizeof(buf));
+			if (!*r)
 				r = NULL;
 		}
 	}
 	else if (ent <= (unsigned int)svs.maxclients && svs.clients[ent-1].active)
 	{
-		ent--;
+		client_t *cl = &svs.clients[ent-1];
 		r = buf;
 		if (!strcmp(key, "ip"))
-			r = NET_QSocketGetTrueAddressString(svs.clients[ent].netconnection);
+			r = NET_QSocketGetTrueAddressString(cl->netconnection);
 		else if (!strcmp(key, "ping"))
 		{
 			float total = 0;
 			unsigned int j;
 			for (j = 0; j < NUM_PING_TIMES; j++)
-				total+=svs.clients[ent].ping_times[j];
+				total+=cl->ping_times[j];
 			total /= NUM_PING_TIMES;
 			q_snprintf(buf, sizeof(buf), "%f", total);
 		}
@@ -3978,25 +4155,26 @@ static void PF_infokey_internal(qboolean returnfloat)
 			}
 		}
 		else if (!strcmp(key, "name"))
-			r = svs.clients[ent].name;
+			r = cl->name;
 		else if (!strcmp(key, "topcolor"))
-			q_snprintf(buf, sizeof(buf), "%u", svs.clients[ent].colors>>4);
+			q_snprintf(buf, sizeof(buf), "%u", cl->colors>>4);
 		else if (!strcmp(key, "bottomcolor"))
-			q_snprintf(buf, sizeof(buf), "%u", svs.clients[ent].colors&15);
+			q_snprintf(buf, sizeof(buf), "%u", cl->colors&15);
 		else if (!strcmp(key, "team"))	//nq doesn't really do teams. qw does though. yay compat?
-			q_snprintf(buf, sizeof(buf), "t%u", (svs.clients[ent].colors&15)+1);
+			q_snprintf(buf, sizeof(buf), "t%u", (cl->colors&15)+1);
 		else if (!strcmp(key, "*VIP"))
 			r = "";
 		else if (!strcmp(key, "*spectator"))
 			r = "";
-		else if (!strcmp(key, "skin"))
-			r = "";
 		else if (!strcmp(key, "csqcactive"))
-			r = "";
-		else if (!strcmp(key, "rate"))
-			r = "0";
+			r = (cl->csqcactive?"1":"0");
 		else
+		{
+			r = Info_GetKey(cl->userinfo, key, buf, sizeof(buf));
+			if (!*r)
+				r = NULL;
 			r = NULL;
+		}
 	}
 	else r = NULL;
 
@@ -4092,11 +4270,12 @@ static void SV_Multicast(multicast_t to, float *org, int msg_entity, unsigned in
 		break;
 	case MULTICAST_ALL_R:
 	case MULTICAST_ALL_U:
-		PF_multicast_internal(to==MULTICAST_PHS_R, NULL, requireext2);
+		PF_multicast_internal(to==MULTICAST_ALL_R, NULL, requireext2);
 		break;
 	case MULTICAST_PHS_R:
 	case MULTICAST_PHS_U:
-		PF_multicast_internal(to==MULTICAST_PHS_R, NULL/*Mod_LeafPHS(Mod_PointInLeaf(org, qcvm->worldmodel), qcvm->worldmodel)*/, requireext2);	//we don't support phs, that would require lots of pvs decompression+merging stuff, and many q1bsps have a LOT of leafs.
+		//we don't support phs, that would require lots of pvs decompression+merging stuff, and many q1bsps have a LOT of leafs.
+		PF_multicast_internal(to==MULTICAST_PHS_R, NULL/*Mod_LeafPHS(Mod_PointInLeaf(org, qcvm->worldmodel), qcvm->worldmodel)*/, requireext2);
 		break;
 	case MULTICAST_PVS_R:
 	case MULTICAST_PVS_U:
@@ -4240,6 +4419,11 @@ static void PF_digest_hex(void)
 		hashdata[0] = crc&0xff;
 		hashdata[1] = (crc>>8)&0xff;
 		len = 2;
+	}
+	else if (!strcmp(hashtype, "MD4"))
+	{
+		Com_BlockFullChecksum((void*)data, len, hashdata);
+		len = 16;
 	}
 	else
 	{
@@ -4863,14 +5047,7 @@ static void PF_cl_stringwidth(void)
 
 static void PF_cl_drawsetclip(void)
 {
-	float s;
-	if (qcvm == &cls.menu_qcvm)
-	{
-		s = q_min((float)glwidth / 320.0, (float)glheight / 200.0);
-		s = CLAMP (1.0, scr_menuscale.value, s);
-	}
-	else
-		s = CLAMP (1.0, scr_sbarscale.value, (float)glwidth / 320.0);
+	float s = PR_GetVMScale();
 
 	float x = G_FLOAT(OFS_PARM0)*s;
 	float y = G_FLOAT(OFS_PARM1)*s;
@@ -5047,6 +5224,9 @@ static void PF_cl_setkeybind(void)
 	int keynum = Key_QCToNative(G_FLOAT(OFS_PARM0));
 	const char *binding = G_STRING(OFS_PARM1);
 	int bindmap = (qcvm->argc<=1)?0:G_FLOAT(OFS_PARM2);
+	int modifier = (qcvm->argc<=2)?0:G_FLOAT(OFS_PARM3);	//shift,alt,ctrl bitmask.
+	if (modifier != 0)	//we don't support modifiers.
+		return;
 	if (bindmap < 0 || bindmap >= MAX_BINDMAPS)
 		bindmap = 0;
 	if (keynum >= 0 && keynum < MAX_KEYS)
@@ -5118,7 +5298,7 @@ static void PF_cl_findkeysforcommand(void)
 static void PF_cl_findkeysforcommandex(void)
 {
 	const char *command = G_STRING(OFS_PARM0);
-	int bindmap = G_FLOAT(OFS_PARM1);
+	int bindmap = (qcvm->argc<=1)?0:G_FLOAT(OFS_PARM1);
 	int keys[16];
 	char *s = PR_GetTempString();
 	int		count = 0;
@@ -5180,14 +5360,14 @@ static void PF_cl_setsensitivity(void)
 }
 void PF_cl_playerkey_internal(int player, const char *key, qboolean retfloat)
 {
-	char buf[64];
-	char *ret = buf;
+	char buf[1024];
+	const char *ret = buf;
 	extern int	fragsort[MAX_SCOREBOARD];
 	extern int	scoreboardlines;
 	extern int	Sbar_ColorForMap (int m);
 	if (player < 0 && player >= -scoreboardlines)
 		player = fragsort[-1-player];
-	if (player < 0 || player > MAX_SCOREBOARD)
+	if (player < 0 || player >= MAX_SCOREBOARD)
 		ret = NULL;
 	else if (!strcmp(key, "viewentity"))
 		q_snprintf(buf, sizeof(buf), "%i", player+1);	//hack for DP compat. always returned even when the slot is empty (so long as its valid).
@@ -5218,7 +5398,7 @@ void PF_cl_playerkey_internal(int player, const char *key, qboolean retfloat)
 	else if (!strcmp(key, "bottomcolor"))
 		q_snprintf(buf, sizeof(buf), "%i", cl.scores[player].colors&0xf);
 	else if (!strcmp(key, "team"))	//quakeworld uses team infokeys to decide teams (instead of colours). but NQ never did, so that's fun. Lets allow mods to use either so that they can favour QW and let the engine hide differences .
-		q_snprintf(buf, sizeof(buf), "%i", cl.scores[player].colors&0xf);
+		q_snprintf(buf, sizeof(buf), "%i", (cl.scores[player].colors&0xf)+1);
 	else if (!strcmp(key, "userid"))
 		ret = NULL;	//unknown
 //	else if (!strcmp(key, "vignored"))	//checks to see this player's voicechat is ignored.
@@ -5232,9 +5412,12 @@ void PF_cl_playerkey_internal(int player, const char *key, qboolean retfloat)
 		else
 			ret = NULL;
 	}
-
 	else
-		ret = NULL;	//no idea.
+	{
+		ret = Info_GetKey(cl.scores[player].userinfo, key, buf, sizeof(buf));
+		if (!*ret)
+			ret = NULL;
+	}
 
 	if (retfloat)
 		G_FLOAT(OFS_RETURN) = ret?atof(ret):0;
@@ -5274,6 +5457,7 @@ static void PF_cl_registercommand(void)
 }
 void PF_cl_serverkey_internal(const char *key, qboolean retfloat)
 {
+	char buf[1024];
 	const char *ret;
 	if (!strcmp(key, "constate"))
 	{
@@ -5286,8 +5470,7 @@ void PF_cl_serverkey_internal(const char *key, qboolean retfloat)
 	}
 	else
 	{
-		//FIXME
-		ret = "";
+		ret = Info_GetKey(cl.serverinfo, key, buf, sizeof(buf));
 	}
 
 	if (retfloat)
@@ -5304,6 +5487,14 @@ static void PF_cl_serverkey_f(void)
 {
 	const char *keyname = G_STRING(OFS_PARM0);
 	PF_cl_serverkey_internal(keyname, true);
+}
+
+static void PF_sv_forceinfokey(void)
+{
+	int edict = G_EDICTNUM(OFS_PARM0);
+	const char *keyname = G_STRING(OFS_PARM1);
+	const char *value = G_STRING(OFS_PARM2);
+	SV_UpdateInfo(edict, keyname, value);
 }
 
 static void PF_cl_readbyte(void)
@@ -5426,15 +5617,7 @@ static void PF_m_getkeydest(void)
 }
 static void PF_m_getmousepos(void)
 {
-	float s;
-	if (qcvm == &cls.menu_qcvm)
-	{
-		s = q_min((float)glwidth / 320.0, (float)glheight / 200.0);
-		s = CLAMP (1.0, scr_menuscale.value, s);
-	}
-	else
-		s = CLAMP (1.0, scr_sbarscale.value, (float)glwidth / 320.0);
-
+	float s = PR_GetVMScale();
 	G_FLOAT(OFS_RETURN+0) = vid.cursorpos[0]/s;
 	G_FLOAT(OFS_RETURN+1) = vid.cursorpos[1]/s;
 	G_FLOAT(OFS_RETURN+2) = 0;
@@ -5481,12 +5664,23 @@ static void PF_cl_getresolution(void)
 	else
 		G_VECTORSET(OFS_RETURN, modes[mode].w,modes[mode].h,1);
 }
+
+enum
+{
+	GGDI_GAMEDIR = 0,   /* Used with getgamedirinfo to query the mod's public gamedir. There is often other info that cannot be expressed with just a gamedir name, resulting in dupes or other weirdness. */
+	GGDI_DESCRIPTION = 1,   /* The human-readable title of the mod. Empty when no data is known (ie: the gamedir just contains some maps). */
+	GGDI_OVERRIDES = 2, /* A list of settings overrides. */
+	GGDI_LOADCOMMAND = 3,   /* The console command needed to actually load the mod. */
+	GGDI_ICON = 4,  /* The mod's Icon path, ready for drawpic. */
+	GGDI_GAMEDIRLIST = 5,   /* A semi-colon delimited list of gamedirs that the mod's content can be loaded through. */
+};
 static void PF_getgamedirinfo(void)
 {
 	int diridx = G_FLOAT(OFS_PARM0);
 	int prop = G_FLOAT(OFS_PARM1);
 
 	struct filelist_item_s *mod = modlist;
+	char *s;
 
 	G_INT(OFS_RETURN) = 0;
 	if (diridx < 0)
@@ -5497,15 +5691,20 @@ static void PF_getgamedirinfo(void)
 
 	switch(prop)
 	{
-	case 0:	//gamedir name
+	case GGDI_GAMEDIR:	//gamedir name
 		G_INT(OFS_RETURN) = PR_SetEngineString(mod->name);
 		break;
-	case 1:	//gamedir description
-	case 2:	//custom overrides
-	case 3:	//loadcommand (localcmd it)
-	case 4:	//icon name (drawpic it)
-	case 5:	//id1;hipnotic;quoth type list
-//		G_INT(OFS_RETURN) = 0;
+	case GGDI_LOADCOMMAND:	//loadcommand (localcmd it)
+		s = PR_GetTempString();
+		q_snprintf(s, STRINGTEMP_LENGTH, "gamedir \"%s\"\n", mod->name);
+		G_INT(OFS_RETURN) = PR_SetEngineString(s);
+		break;
+	case GGDI_DESCRIPTION:	//gamedir description
+	case GGDI_OVERRIDES:	//custom overrides
+	case GGDI_ICON:	//icon name (drawpic it)
+	case GGDI_GAMEDIRLIST:	//id1;hipnotic;quoth type list
+	default:	//unknown
+		G_INT(OFS_RETURN) = 0;
 		break;
 	}
 }
@@ -5530,19 +5729,19 @@ static size_t hostCacheSortCount;
 static size_t hostCacheSort[HOSTCACHESIZE];
 static enum hostfield_e serversort_field;
 static int serversort_descending;
-static void PF_gethostcachevalue(void)
-{
-	enum{
+enum hostcacheprop_e {
 		SLIST_HOSTCACHEVIEWCOUNT,
 		SLIST_HOSTCACHETOTALCOUNT,
-		SLIST_MASTERQUERYCOUNT,
-		SLIST_MASTERREPLYCOUNT,
-		SLIST_SERVERQUERYCOUNT,
-		SLIST_SERVERREPLYCOUNT,
+		SLIST_MASTERQUERYCOUNT_DP,
+		SLIST_MASTERREPLYCOUNT_DP,
+		SLIST_SERVERQUERYCOUNT_DP,
+		SLIST_SERVERREPLYCOUNT_DP,
 		SLIST_SORTFIELD,
 		SLIST_SORTDESCENDING
-	} fld = G_FLOAT(OFS_PARM0);
-	switch(fld)
+};
+static void PF_gethostcachevalue(void)
+{
+	switch((enum hostcacheprop_e)G_FLOAT(OFS_PARM0))
 	{
 	case SLIST_HOSTCACHEVIEWCOUNT:
 		G_FLOAT(OFS_RETURN) = hostCacheSortCount?hostCacheSortCount:hostCacheCount;
@@ -5550,10 +5749,10 @@ static void PF_gethostcachevalue(void)
 	case SLIST_HOSTCACHETOTALCOUNT:
 		G_FLOAT(OFS_RETURN) = hostCacheCount;
 		break;
-	case SLIST_MASTERQUERYCOUNT:
-	case SLIST_MASTERREPLYCOUNT:
-	case SLIST_SERVERQUERYCOUNT:
-	case SLIST_SERVERREPLYCOUNT:
+	case SLIST_MASTERQUERYCOUNT_DP:
+	case SLIST_MASTERREPLYCOUNT_DP:
+	case SLIST_SERVERQUERYCOUNT_DP:
+	case SLIST_SERVERREPLYCOUNT_DP:
 		G_FLOAT(OFS_RETURN) = 0;
 		break;
 	case SLIST_SORTFIELD:
@@ -5729,7 +5928,27 @@ static void PF_gethostcacheindexforkey(void)
 //static void PF_netaddress_resolve(void){G_VECTORSET(OFS_RETURN, 0,0,0);}
 static void PF_uri_get(void){G_VECTORSET(OFS_RETURN, 0,0,0);}
 
+static const char *csqcmapentitydata;
+static void PF_cs_getentitytoken(void)
+{
+	if (qcvm->argc)
+	{
+		csqcmapentitydata = cl.worldmodel->entities;
+		G_INT(OFS_RETURN) = 0;
+		return;
+	}
 
+	if (csqcmapentitydata)
+	{
+		csqcmapentitydata = COM_Parse(csqcmapentitydata);
+		if (!csqcmapentitydata)
+			G_INT(OFS_RETURN) = 0;
+		else
+			G_INT(OFS_RETURN) = PR_MakeTempString(com_token);
+	}
+	else
+		G_INT(OFS_RETURN) = 0;
+}
 static void PF_m_setmodel(void)
 {
 	edict_t *ed = G_EDICT(OFS_PARM0);
@@ -5772,27 +5991,88 @@ static void PF_m_precache_model(void)
 }
 entity_t *CL_NewTempEntity (void);
 extern int num_temp_entities;
-static void PF_m_addentity(void)
+enum
 {
-	edict_t *ed = G_EDICT(OFS_PARM0);
-
-	eval_t *emodel = GetEdictFieldValue(ed, ED_FindFieldOffset("model"));
-	qmodel_t *model = emodel?Mod_ForName(PR_GetString(emodel->_int), false):NULL;
+	RF_VIEWMODEL		= 1u<<0,	//uses a different view matrix, hidden from mirrors.
+	RF_EXTERNALMODEL	= 1u<<1,	//hidden except in mirrors.
+	RF_DEPTHHACK		= 1u<<2,	//uses a different projection matrix (with depth squished by a third, optionally also using separate viewmodel fov)
+	RF_ADDITIVE			= 1u<<3,	//additive blend mode, because .effects was meant to be handled by the csqc.
+	RF_USEAXIS			= 1u<<4,	//explicit matrix defined in v_forward/v_right/v_up/.origin instead of calculating from angles (yay skew+scale)
+	RF_NOSHADOW			= 1u<<5,	//disable shadows, because .effects was meant to be handled by the csqc.
+	RF_WEIRDFRAMETIMES	= 1u<<6,	//change frame*time fields to need to be translated as realframeNtime='time-frameNtime' to determine which pose to use.
+						//CONSULT OTHER ENGINES BEFORE ADDING NEW FLAGS.
+};
+static void PR_addentity_internal(edict_t *ed)	//adds a csqc entity into the scene.
+{
+	qmodel_t *model = qcvm->GetModel(ed->v.modelindex);
 
 	if (model)
 	{
 		entity_t *e = CL_NewTempEntity();
 		if (e)
 		{
-			eval_t *origin = GetEdictFieldValue(ed, ED_FindFieldOffset("origin"));
-			eval_t *angles = GetEdictFieldValue(ed, ED_FindFieldOffset("angles"));
-			eval_t *frame = GetEdictFieldValue(ed, ED_FindFieldOffset("frame"));
-			eval_t *frame2 = GetEdictFieldValue(ed, ED_FindFieldOffset("frame2"));
-			eval_t *lerpfrac = GetEdictFieldValue(ed, ED_FindFieldOffset("lerpfrac"));
-			eval_t *frame1time = GetEdictFieldValue(ed, ED_FindFieldOffset("frame1time"));
-			eval_t *frame2time = GetEdictFieldValue(ed, ED_FindFieldOffset("frame2time"));
-			eval_t *skin = GetEdictFieldValue(ed, ED_FindFieldOffset("skin"));
-			eval_t *alpha = GetEdictFieldValue(ed, ED_FindFieldOffset("alpha"));
+			eval_t *frame2 = GetEdictFieldValue(ed, qcvm->extfields.frame2);
+			eval_t *lerpfrac = GetEdictFieldValue(ed, qcvm->extfields.lerpfrac);
+			eval_t *frame1time = GetEdictFieldValue(ed, qcvm->extfields.frame1time);
+			eval_t *frame2time = GetEdictFieldValue(ed, qcvm->extfields.frame2time);
+			eval_t *alpha = GetEdictFieldValue(ed, qcvm->extfields.alpha);
+			eval_t *renderflags = GetEdictFieldValue(ed, qcvm->extfields.renderflags);
+			int rf = renderflags?renderflags->_float:0;
+
+			VectorCopy(ed->v.origin, e->origin);
+			VectorCopy(ed->v.angles, e->angles);
+			e->model = model;
+			e->skinnum = ed->v.skin;
+			e->alpha = alpha?ENTALPHA_ENCODE(alpha->_float):ENTALPHA_DEFAULT;
+
+			//can't exactly use currentpose/previous pose, as we don't know them.
+			e->lerpflags = LERP_EXPLICIT|LERP_RESETANIM|LERP_RESETMOVE;
+			e->frame = ed->v.frame;
+			e->lerp.snap.frame2 = frame2?frame2->_float:0;
+			e->lerp.snap.lerpfrac = lerpfrac?lerpfrac->_float:0;
+			e->lerp.snap.lerpfrac = q_max(0.f, e->lerp.snap.lerpfrac);
+			e->lerp.snap.lerpfrac = q_min(1.f, e->lerp.snap.lerpfrac);
+			e->lerp.snap.time[0] = frame1time?frame1time->_float:0;
+			e->lerp.snap.time[1] = frame2time?frame2time->_float:0;
+
+			if (rf & RF_VIEWMODEL)
+				e->eflags |= EFLAGS_VIEWMODEL;
+			if (rf & RF_EXTERNALMODEL)
+				e->eflags |= EFLAGS_EXTERIORMODEL;
+			if (rf & RF_WEIRDFRAMETIMES)
+			{
+				e->lerp.snap.time[0] = qcvm->time - e->lerp.snap.time[0];
+				e->lerp.snap.time[1] = qcvm->time - e->lerp.snap.time[1];
+			}
+		}
+	}
+}
+static void PF_cs_addentity(void)
+{
+	PR_addentity_internal(G_EDICT(OFS_PARM0));
+}
+static void PF_m_addentity(void)
+{
+	edict_t *ed = G_EDICT(OFS_PARM0);
+
+	eval_t *emodel = GetEdictFieldValue(ed, ED_FindFieldOffset("model"));
+	const char *modelname = emodel?PR_GetString(emodel->_int):"";
+	qmodel_t *model = *modelname?Mod_ForName(modelname, false):NULL;
+
+	if (model)
+	{
+		entity_t *e = CL_NewTempEntity();
+		if (e)
+		{
+			eval_t *origin = GetEdictFieldValue(ed, qcvm->extfields.origin);
+			eval_t *angles = GetEdictFieldValue(ed, qcvm->extfields.angles);
+			eval_t *frame = GetEdictFieldValue(ed, qcvm->extfields.frame);
+			eval_t *frame2 = GetEdictFieldValue(ed, qcvm->extfields.frame2);
+			eval_t *lerpfrac = GetEdictFieldValue(ed, qcvm->extfields.lerpfrac);
+			eval_t *frame1time = GetEdictFieldValue(ed, qcvm->extfields.frame1time);
+			eval_t *frame2time = GetEdictFieldValue(ed, qcvm->extfields.frame2time);
+			eval_t *skin = GetEdictFieldValue(ed, qcvm->extfields.skin);
+			eval_t *alpha = GetEdictFieldValue(ed, qcvm->extfields.alpha);
 
 			if (origin)
 				VectorCopy(origin->vector, e->origin);
@@ -5812,6 +6092,89 @@ static void PF_m_addentity(void)
 		}
 	}
 }
+enum
+{
+	MASK_ENGINE		= 1<<0,
+	MASK_VIEWMODEL	= 1<<1,
+};
+static void PF_cs_addentities(void)
+{
+	int mask = G_FLOAT(OFS_PARM0);
+	int i;
+	size_t count;
+
+	edict_t		*ed;
+	entity_t	*ent;	//spike -- moved into here
+	eval_t		*ev;
+
+	if (!mask)
+		return;	//o.O
+
+	if ((mask & MASK_ENGINE) && qcvm->worldmodel)
+	{
+		for (i=1,ent=cl.entities+1 ; i<cl.num_entities ; i++,ent++)
+		{
+			if (!ent->model)
+				continue;
+
+			if (i == cl.viewentity && !chase_active.value)
+				continue;
+
+			if (cl_numvisedicts < cl_maxvisedicts)
+			{
+				cl_visedicts[cl_numvisedicts] = ent;
+				cl_numvisedicts++;
+			}
+		}
+	}
+
+	if (qcvm->extfields.drawmask >= 0)
+	{	//walk the csqc entities to add those to the scene (if their drawmask matches our arg)
+		for (count = qcvm->num_edicts-1, ed = EDICT_NUM(1); count --> 0; ed = NEXT_EDICT(ed))
+		{
+			if (ed->free)
+				continue;
+			ev = GetEdictFieldValue(ed, qcvm->extfields.drawmask);
+			if ((int)ev->_float & mask)
+			{	//its a candidate!
+				ev = GetEdictFieldValue(ed, qcvm->extfields.predraw);
+				if (ev && ev->function)
+				{
+					pr_global_struct->self = EDICT_TO_PROG(ed);
+					PR_ExecuteProgram(ev->function);
+					if (ed->free || G_FLOAT(OFS_RETURN))
+						continue;	//bummer...
+				}
+				PR_addentity_internal(ed);
+			}
+		}
+	}
+
+	if (mask & MASK_VIEWMODEL)
+	{
+		//default viewmodel.
+	}
+
+
+}
+static void PF_cs_addlight(void)
+{
+	float *org = G_VECTOR(OFS_PARM0);
+	float radius = G_FLOAT(OFS_PARM1);
+	float *rgb = G_VECTOR(OFS_PARM2);
+//	float style = G_FLOAT(OFS_PARM3);
+//	const char *cubename = G_STRING(OFS_PARM4);
+//	float pflags = G_FLOAT(OFS_PARM5);
+
+	int key = 0;
+	dlight_t *dl = CL_AllocDlight (key);
+	VectorCopy(rgb, dl->color);
+	VectorCopy (org,  dl->origin);
+	dl->radius = radius;
+	dl->minlight = 32;
+	dl->die = 0;
+	dl->decay = 0;
+}
 static struct
 {
 	float rect_pos[2];
@@ -5821,8 +6184,12 @@ static struct
 	float fov_y;
 	vec3_t origin;
 	vec3_t angles;
+
+	qboolean drawsbar;
+	qboolean drawcrosshair;
 } viewprops;
 
+void V_CalcRefdef (void);
 static void PF_m_clearscene(void)
 {
 	if (cl_numvisedicts + 64 > cl_maxvisedicts)
@@ -5837,101 +6204,350 @@ static void PF_m_clearscene(void)
 	memset(&viewprops, 0, sizeof(viewprops));
 	viewprops.rect_size[0] = vid.width;
 	viewprops.rect_size[1] = vid.height;
+
+	if (qcvm == &cl.qcvm)
+	{
+		r_refdef.drawworld = true;
+		V_CalcRefdef();
+		VectorCopy(r_refdef.vieworg, viewprops.origin);
+		VectorCopy(r_refdef.viewangles, viewprops.angles);
+	}
+	else	//menuqc has different defaults, with the assumption that the world will never be drawn etc.
+		r_refdef.drawworld = false;
 }
 
+enum
+{
+//the basic range.
+	VF_MIN					= 1,
+	VF_MIN_X				= 2,
+	VF_MIN_Y				= 3,
+	VF_SIZE					= 4,
+	VF_SIZE_X				= 5,
+	VF_SIZE_Y				= 6,
+	VF_VIEWPORT				= 7,
+	VF_FOV					= 8,
+	VF_FOV_X				= 9,
+	VF_FOV_Y				= 10,
+	VF_ORIGIN				= 11,
+	VF_ORIGIN_X				= 12,
+	VF_ORIGIN_Y				= 13,
+	VF_ORIGIN_Z				= 14,
+	VF_ANGLES				= 15,
+	VF_ANGLES_X				= 16,
+	VF_ANGLES_Y				= 17,
+	VF_ANGLES_Z				= 18,
+	VF_DRAWWORLD			= 19,
+	VF_DRAWENGINESBAR		= 20,
+	VF_DRAWCROSSHAIR		= 21,
+//	VF_						= 22,
+	VF_MINDIST				= 23,
+	VF_MAXDIST				= 24,
+//	VF_						= 25,
+//	VF_						= 26,
+//	VF_						= 27,
+//	VF_						= 28,
+//	VF_						= 29,
+//	VF_						= 30,
+//	VF_						= 31,
+//	VF_						= 32,
+
+//the weird DP hacks range.
+	VF_CL_VIEWANGLES		= 33,
+	VF_CL_VIEWANGLES_X		= 34,
+	VF_CL_VIEWANGLES_Y		= 35,
+	VF_CL_VIEWANGLES_Z		= 36,
+
+//the FTE range.
+	//VF_PERSPECTIVE		= 200,
+	//VF_DP_CLEARSCREEN		= 201,
+	VF_ACTIVESEAT			= 202,
+	VF_AFOV					= 203,
+	VF_SCREENVSIZE			= 204,
+	VF_SCREENPSIZE			= 205,
+	//VF_VIEWENTITY			= 206,
+	//VF_STATSENTITY		= 207,	//the player number for the stats.
+	//VF_SCREENVOFFSET		= 208,
+	//VF_RT_SOURCECOLOUR	= 209,
+	//VF_RT_DEPTH			= 210,
+	//VF_RT_RIPPLE			= 211,	/**/
+	//VF_RT_DESTCOLOUR0		= 212,
+	//VF_RT_DESTCOLOUR1		= 213,
+	//VF_RT_DESTCOLOUR2		= 214,
+	//VF_RT_DESTCOLOUR3		= 215,
+	//VF_RT_DESTCOLOUR4		= 216,
+	//VF_RT_DESTCOLOUR5		= 217,
+	//VF_RT_DESTCOLOUR6		= 218,
+	//VF_RT_DESTCOLOUR7		= 219,
+	//VF_ENVMAP				= 220,	//cubemap image for reflectcube
+	//VF_USERDATA			= 221,	//data for glsl
+	//VF_SKYROOM_CAMERA		= 222,	//vec origin
+	//VF_PIXELPSCALE		= 223,	//[dpi_x, dpi_y, dpi_y/dpi_x]
+	//VF_PROJECTIONOFFSET	= 224,	//allows for off-axis projections.
+
+//DP's range
+	//VF_DP_MAINVIEW		= 400, // defective. should be a viewid instead, allowing for per-view motionblur instead of disabling it outright
+	//VF_DP_MINFPS_QUALITY	= 401, //multiplier for lod and culling to try to reduce costs.
+};
+static void PF_m_getproperty(void)
+{
+	float s;
+	int prop = G_FLOAT(OFS_PARM0);
+	G_FLOAT(OFS_RETURN+0) =
+	G_FLOAT(OFS_RETURN+1) =
+	G_FLOAT(OFS_RETURN+2) = 0;
+	switch(prop)
+	{	//NOTE: These indexes are shared between engines. whoever thought THAT would be a good idea...
+	case VF_MIN:		//min
+		G_FLOAT(OFS_RETURN+0) = viewprops.rect_pos[0];
+		G_FLOAT(OFS_RETURN+1) = viewprops.rect_pos[1];
+		break;
+	case VF_MIN_X:
+		G_FLOAT(OFS_RETURN+0) = viewprops.rect_pos[0];
+		break;
+	case VF_MIN_Y:
+		G_FLOAT(OFS_RETURN+0) = viewprops.rect_pos[1];
+		break;
+	case VF_SIZE:		//size
+		G_FLOAT(OFS_RETURN+0) = viewprops.rect_size[0];
+		G_FLOAT(OFS_RETURN+1) = viewprops.rect_size[1];
+		break;
+	case VF_SIZE_X:
+		G_FLOAT(OFS_RETURN+0) = viewprops.rect_size[0];
+		break;
+	case VF_SIZE_Y:
+		G_FLOAT(OFS_RETURN+0) = viewprops.rect_size[1];
+		break;
+	//case VF_VIEWPORT:	//viewport. doesn't make sense for a single vector return.
+	case VF_FOV:
+		G_FLOAT(OFS_RETURN+0) = viewprops.fov_x;
+		G_FLOAT(OFS_RETURN+1) = viewprops.fov_y;
+		break;
+	case VF_FOV_X:
+		G_FLOAT(OFS_RETURN+0) = viewprops.fov_x;
+		break;
+	case VF_FOV_Y:
+		G_FLOAT(OFS_RETURN+0) = viewprops.fov_y;
+		break;
+	case VF_ORIGIN:	//vieworigin
+		if (qcvm->nogameaccess)
+			goto accessblocked;
+		VectorCopy(viewprops.origin, G_VECTOR(OFS_PARM1));
+		break;
+	case VF_ORIGIN_X:
+	case VF_ORIGIN_Y:
+	case VF_ORIGIN_Z:
+		if (qcvm->nogameaccess)
+			goto accessblocked;
+		G_FLOAT(OFS_RETURN+0) = viewprops.origin[prop-VF_ORIGIN_X];
+		break;
+	case VF_ANGLES:	//viewangles
+		if (qcvm->nogameaccess)
+			goto accessblocked;
+		VectorCopy(viewprops.angles, G_VECTOR(OFS_PARM1));
+		break;
+	case VF_ANGLES_X:
+	case VF_ANGLES_Y:
+	case VF_ANGLES_Z:
+		if (qcvm->nogameaccess)
+			goto accessblocked;
+		G_FLOAT(OFS_RETURN+0) = viewprops.angles[prop-VF_ANGLES_X];
+		break;
+	case VF_DRAWWORLD: //drawworld
+		G_FLOAT(OFS_RETURN+0) = r_refdef.drawworld;
+		break;
+	case VF_DRAWENGINESBAR: //engine sbar
+		G_FLOAT(OFS_RETURN+0) = viewprops.drawsbar;
+		break;
+	case VF_DRAWCROSSHAIR: //crosshair
+		G_FLOAT(OFS_RETURN+0) = viewprops.drawcrosshair;
+		break;
+	case VF_MINDIST:
+		#define NEARCLIP 4
+		G_FLOAT(OFS_RETURN+0) = NEARCLIP;
+		break;
+	case VF_MAXDIST: //maxdist
+		{
+			extern cvar_t gl_farclip;
+			G_FLOAT(OFS_RETURN+0) = gl_farclip.value;
+		}
+		break;
+
+	case VF_CL_VIEWANGLES:	//viewangles hack
+		if (qcvm->nogameaccess)
+			goto accessblocked;
+		VectorCopy(cl.viewangles, G_VECTOR(OFS_RETURN));
+		break;
+	case VF_CL_VIEWANGLES_X:
+	case VF_CL_VIEWANGLES_Y:
+	case VF_CL_VIEWANGLES_Z:
+		if (qcvm->nogameaccess)
+			goto accessblocked;
+		G_FLOAT(OFS_RETURN+0) = cl.viewangles[prop-VF_CL_VIEWANGLES_X];
+		break;
+
+	//fte's range
+//	case VF_PERSPECTIVE:	//useperspective (0 for isometric)
+//	case VF_DP_CLEARSCREEN:
+	case VF_ACTIVESEAT:		//active seat
+		G_FLOAT(OFS_RETURN+0) = 0;
+		break;
+	case VF_AFOV:	//aproximate fov
+		G_FLOAT(OFS_RETURN+0) = viewprops.afov;
+		break;
+	case VF_SCREENVSIZE:	//virtual size (readonly)
+		s = PR_GetVMScale();
+		G_FLOAT(OFS_RETURN+0) = glwidth/s;
+		G_FLOAT(OFS_RETURN+1) = glheight/s;
+		break;
+	case VF_SCREENPSIZE:	//physical size (readonly)
+		G_FLOAT(OFS_RETURN+0) = glwidth;
+		G_FLOAT(OFS_RETURN+1) = glheight;
+		break;
+//	case VF_VIEWENTITY:	//viewentity
+//	case VF_STATSENTITY:	//stats entity
+//	case VF_SCREENVOFFSET:
+//	case VF_RT_SOURCECOLOUR:	//sourcecolour
+//	case VF_RT_DEPTH:	//depth
+//	case VF_RT_RIPPLE:	//ripplemap
+//	case VF_RT_DESTCOLOUR0:	//destcolour0
+//	case VF_RT_DESTCOLOUR1:	//destcolour1
+//	case VF_RT_DESTCOLOUR2:	//destcolour2
+//	case VF_RT_DESTCOLOUR3:	//destcolour3
+//	case VF_RT_DESTCOLOUR4:	//destcolour4
+//	case VF_RT_DESTCOLOUR5:	//destcolour5
+//	case VF_RT_DESTCOLOUR6:	//destcolour6
+//	case VF_RT_DESTCOLOUR7:	//destcolour7
+//	case VF_ENVMAP:	//envmap
+//	case VF_USERDATA:	//userdata (glsl uniform vec4 array)
+//	case VF_SKYROOM_CAMERA:	//skyroom camera
+//	case VF_PIXELPSCALE:	//dots-per-inch x,y
+//	case VF_PROJECTIONOFFSET:	//projection offset
+
+	//dp's range
+//	case VF_DP_MAINVIEW: //mainview
+//	case VF_DP_MINFPS_QUALITY: //lodquality
+	default:
+		Con_Printf("PF_getproperty(%i): unsupported property\n", prop);
+		break;
+	accessblocked:
+		Con_Printf("PF_getproperty(%i): not allowed to access game properties\n", prop);
+		break;
+	}
+}
 static void PF_m_setproperty(void)
 {
 	int prop = G_FLOAT(OFS_PARM0);
 	switch(prop)
 	{	//NOTE: These indexes are shared between engines. whoever thought THAT would be a good idea...
-	case 1:		//min
+	case VF_MIN:		//min
 		viewprops.rect_pos[0] = G_FLOAT(OFS_PARM1+0);
 		viewprops.rect_pos[1] = G_FLOAT(OFS_PARM1+1);
 		break;
-	case 2:
+	case VF_MIN_X:
 		viewprops.rect_pos[0] = G_FLOAT(OFS_PARM1);
 		break;
-	case 3:
+	case VF_MIN_Y:
 		viewprops.rect_pos[1] = G_FLOAT(OFS_PARM1);
 		break;
-	case 4:		//size
+	case VF_SIZE:		//size
 		viewprops.rect_size[0] = G_FLOAT(OFS_PARM1+0);
 		viewprops.rect_size[1] = G_FLOAT(OFS_PARM1+1);
 		break;
-	case 5:
+	case VF_SIZE_X:
 		viewprops.rect_size[0] = G_FLOAT(OFS_PARM1);
 		break;
-	case 6:
+	case VF_SIZE_Y:
 		viewprops.rect_size[1] = G_FLOAT(OFS_PARM1);
 		break;
-	case 7:
+	case VF_VIEWPORT:
 		viewprops.rect_pos[0] = G_FLOAT(OFS_PARM1+0);
 		viewprops.rect_pos[1] = G_FLOAT(OFS_PARM1+1);
 		viewprops.rect_size[0] = G_FLOAT(OFS_PARM2+0);
 		viewprops.rect_size[1] = G_FLOAT(OFS_PARM2+1);
 		break;
-	case 8:
+	case VF_FOV:
 		viewprops.fov_x = G_FLOAT(OFS_PARM1+0);
 		viewprops.fov_y = G_FLOAT(OFS_PARM1+1);
 		break;
-	case 9:
+	case VF_FOV_X:
 		viewprops.fov_x = G_FLOAT(OFS_PARM1);
 		break;
-	case 10:
+	case VF_FOV_Y:
 		viewprops.fov_y = G_FLOAT(OFS_PARM1);
 		break;
-	case 11:	//vieworigin
+	case VF_ORIGIN:	//vieworigin
 		VectorCopy(G_VECTOR(OFS_PARM1), viewprops.origin);
 		break;
-	case 12:
-	case 13:
-	case 14:
-		viewprops.origin[prop-12] = G_FLOAT(OFS_PARM1);
+	case VF_ORIGIN_X:
+	case VF_ORIGIN_Y:
+	case VF_ORIGIN_Z:
+		viewprops.origin[prop-VF_ORIGIN_X] = G_FLOAT(OFS_PARM1);
 		break;
-	case 15:	//viewangles
+	case VF_ANGLES:	//viewangles
 		VectorCopy(G_VECTOR(OFS_PARM1), viewprops.angles);
 		break;
-	case 16:
-	case 17:
-	case 18:
-		viewprops.angles[prop-16] = G_FLOAT(OFS_PARM1);
+	case VF_ANGLES_X:
+	case VF_ANGLES_Y:
+	case VF_ANGLES_Z:
+		viewprops.angles[prop-VF_ANGLES_X] = G_FLOAT(OFS_PARM1);
 		break;
-	//case 19: //drawworld
-	//case 20: //engine sbar
-	//case 21: //crosshair
-	//case 23: //mindist
-	//case 24: //maxdist
+	case VF_DRAWWORLD: //drawworld
+		r_refdef.drawworld = G_FLOAT(OFS_PARM1);
+		break;
+	case VF_DRAWENGINESBAR: //engine sbar
+		viewprops.drawsbar = G_FLOAT(OFS_PARM1);
+		break;
+	case VF_DRAWCROSSHAIR: //crosshair
+		viewprops.drawcrosshair = G_FLOAT(OFS_PARM1);
+		break;
+//	case VF_MINDIST: //mindist
+//	case VF_MAXDIST: //maxdist
+
+	case VF_CL_VIEWANGLES:	//viewangles hack
+		VectorCopy(G_VECTOR(OFS_PARM1), cl.viewangles);
+		break;
+	case VF_CL_VIEWANGLES_X:
+	case VF_CL_VIEWANGLES_Y:
+	case VF_CL_VIEWANGLES_Z:
+		cl.viewangles[prop-VF_CL_VIEWANGLES_X] = G_FLOAT(OFS_PARM1);
+		break;
 
 	//fte's range
-//	case 200:	//useperspective (0 for isometric)
-//	case 202:	//active seat
-	case 203:	//aproximate fov
+//	case VF_PERSPECTIVE:	//useperspective (0 for isometric)
+//	case VF_DP_CLEARSCREEN:	//active seat
+	case VF_ACTIVESEAT:		//active seat
+		if (G_FLOAT(OFS_PARM1))
+			Con_Printf("VF_ACTIVESEAT: splitscreen not supported\n");
+		break;
+	case VF_AFOV:	//aproximate fov
 		viewprops.afov = G_FLOAT(OFS_PARM1);
 		break;
-//	case 204:	//virtual size (readonly)
-//	case 205:	//physical size (readonly)
-//	case 206:	//viewentity
-//	case 207:	//stats entity
-//	case 209:	//sourcecolour
-//	case 210:	//depth
-//	case 211:	//ripplemap
-//	case 210:	//destcolour0
-//	case 211:	//destcolour1
-//	case 212:	//destcolour2
-//	case 213:	//destcolour3
-//	case 214:	//destcolour4
-//	case 215:	//destcolour5
-//	case 216:	//destcolour6
-//	case 217:	//destcolour7
-//	case 220:	//envmap
-//	case 221:	//userdata (glsl uniform vec4 array)
-//	case 222:	//skyroom camera
-//	case 223:	//dots-per-inch x,y
-//	case 224:	//projection offset
+//	case VF_SCREENVSIZE:	//virtual size (readonly)
+//	case VF_SCREENPSIZE:	//physical size (readonly)
+//	case VF_VIEWENTITY:	//viewentity
+//	case VF_STATSENTITY:	//stats entity
+//	case VF_SCREENVOFFSET:
+//	case VF_RT_SOURCECOLOUR:	//sourcecolour
+//	case VF_RT_DEPTH:	//depth
+//	case VF_RT_RIPPLE:	//ripplemap
+//	case VF_RT_DESTCOLOUR0:	//destcolour0
+//	case VF_RT_DESTCOLOUR1:	//destcolour1
+//	case VF_RT_DESTCOLOUR2:	//destcolour2
+//	case VF_RT_DESTCOLOUR3:	//destcolour3
+//	case VF_RT_DESTCOLOUR4:	//destcolour4
+//	case VF_RT_DESTCOLOUR5:	//destcolour5
+//	case VF_RT_DESTCOLOUR6:	//destcolour6
+//	case VF_RT_DESTCOLOUR7:	//destcolour7
+//	case VF_ENVMAP:	//envmap
+//	case VF_USERDATA:	//userdata (glsl uniform vec4 array)
+//	case VF_SKYROOM_CAMERA:	//skyroom camera
+//	case VF_PIXELPSCALE:	//dots-per-inch x,y
+//	case VF_PROJECTIONOFFSET:	//projection offset
 
 	//dp's range
-//	case 400: //mainview
-//	case 401: //lodquality
+//	case VF_DP_MAINVIEW: //mainview
+//	case VF_DP_MINFPS_QUALITY: //lodquality
 	default:
 		Con_Printf("PF_m_setproperty: unsupported property %i\n", prop);
 		break;
@@ -5940,17 +6556,12 @@ static void PF_m_setproperty(void)
 
 void R_SetupView (void);
 void R_RenderScene (void);
+void SCR_DrawCrosshair (void);
 float CalcFovy (float fov_x, float width, float height);
+extern cvar_t scr_fov;
 static void PF_m_renderscene(void)
 {
-	float s;
-	if (qcvm == &cls.menu_qcvm)
-	{
-		s = q_min((float)glwidth / 320.0, (float)glheight / 200.0);
-		s = CLAMP (1.0, scr_menuscale.value, s);
-	}
-	else
-		s = CLAMP (1.0, scr_sbarscale.value, (float)glwidth / 320.0);
+	float s = PR_GetVMScale();
 
 	VectorCopy(viewprops.origin, r_refdef.vieworg);
 	VectorCopy(viewprops.angles, r_refdef.viewangles);
@@ -5958,6 +6569,11 @@ static void PF_m_renderscene(void)
 	r_refdef.vrect.y = viewprops.rect_pos[1]*s;
 	r_refdef.vrect.width = viewprops.rect_size[0]*s;
 	r_refdef.vrect.height = viewprops.rect_size[1]*s;
+	if (r_refdef.vrect.width < 1 || r_refdef.vrect.height < 1)
+		return;	//can't draw nuffin...
+
+	if (!viewprops.afov)
+		viewprops.afov = scr_fov.value;
 	if (r_refdef.vrect.width/r_refdef.vrect.height < 4/3)
 	{
 		r_refdef.fov_y = viewprops.afov;
@@ -5970,12 +6586,17 @@ static void PF_m_renderscene(void)
 		r_refdef.fov_x = atan(r_refdef.fov_x) * (360.0 / M_PI);
 		r_refdef.fov_y = atan(r_refdef.fov_y) * (360.0 / M_PI);
 	}
-	r_refdef.drawworld = false;
 	R_SetupView ();
 	R_RenderScene ();
 
 	vid.recalc_refdef = true;
 	GL_Set2D();
+
+	if (!cl.intermission && viewprops.drawsbar)
+		Sbar_Draw ();
+	if (!cl.intermission && viewprops.drawcrosshair)
+		SCR_DrawCrosshair ();
+
 	if (qcvm == &cls.menu_qcvm)
 		GL_SetCanvas (CANVAS_MENUQC);
 	else
@@ -5983,6 +6604,200 @@ static void PF_m_renderscene(void)
 	glEnable (GL_BLEND);
 	glDisable (GL_ALPHA_TEST);
 	glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+}
+
+static void PF_cs_setlistener(void)
+{
+	float *origin = G_VECTOR(OFS_PARM0);
+	float *forward = G_VECTOR(OFS_PARM1);
+	float *right = G_VECTOR(OFS_PARM2);
+	float *up = G_VECTOR(OFS_PARM3);
+//	int reverbtype = (qcvm->argc <= 4)?0:G_FLOAT(OFS_PARM4);
+
+	cl.listener_defined = true;	//lasts until the next video frame.
+	VectorCopy(origin, cl.listener_origin);
+	VectorCopy(forward, cl.listener_axis[0]);
+	VectorCopy(right, cl.listener_axis[1]);
+	VectorCopy(up, cl.listener_axis[2]);
+}
+
+void CL_CSQC_SetInputs(usercmd_t *cmd, qboolean set);
+static void PF_cs_getinputstate(void)
+{
+	unsigned int seq = G_FLOAT(OFS_PARM0);
+	if (seq == cl.movemessages)
+	{	//the partial/pending frame!
+		G_FLOAT(OFS_RETURN) = 1;
+		CL_CSQC_SetInputs(&cl.pendingcmd, true);
+	}
+	else if (cl.movecmds[seq&MOVECMDS_MASK].sequence == seq)
+	{	//valid sequence slot.
+		G_FLOAT(OFS_RETURN) = 1;
+		CL_CSQC_SetInputs(&cl.movecmds[seq&MOVECMDS_MASK], true);
+	}
+	else
+		G_FLOAT(OFS_RETURN) = 0; //invalid
+}
+
+static void PF_touchtriggers (void)
+{
+	edict_t	*e;
+	float	*org;
+
+	e = (qcvm->argc > 0)?G_EDICT(OFS_PARM0):G_EDICT(pr_global_struct->self);
+	if (qcvm->argc > 1)
+	{
+		org = G_VECTOR(OFS_PARM1);
+		VectorCopy (org, e->v.origin);
+	}
+	SV_LinkEdict (e, true);
+}
+
+static void PF_checkpvs (void)
+{
+	float *org = G_VECTOR(OFS_PARM0);
+	edict_t *ed = G_EDICT(OFS_PARM1);
+
+	mleaf_t *leaf = Mod_PointInLeaf (org, qcvm->worldmodel);
+	byte *pvs = Mod_LeafPVS (leaf, qcvm->worldmodel); //johnfitz -- worldmodel as a parameter
+	int i;
+
+	for (i=0 ; i < ed->num_leafs ; i++)
+	{
+		if (pvs[ed->leafnums[i] >> 3] & (1 << (ed->leafnums[i]&7) ))
+		{
+			G_FLOAT(OFS_RETURN) = true;
+			return;
+		}
+	}
+
+	G_FLOAT(OFS_RETURN) = false;
+}
+
+enum getrenderentityfield_e
+{
+	GE_MAXENTS			= -1,
+	GE_ACTIVE			= 0,
+	GE_ORIGIN			= 1,
+	GE_FORWARD			= 2,
+	GE_RIGHT			= 3,
+	GE_UP				= 4,
+	GE_SCALE			= 5,
+	GE_ORIGINANDVECTORS	= 6,
+	GE_ALPHA			= 7,
+	GE_COLORMOD			= 8,
+	GE_PANTSCOLOR		= 9,
+	GE_SHIRTCOLOR		= 10,
+	GE_SKIN				= 11,
+//	GE_MINS				= 12,
+//	GE_MAXS				= 13,
+//	GE_ABSMIN			= 14,
+//	GE_ABSMAX			= 15,
+//	GE_LIGHT			= 16,
+};
+static void PF_cl_getrenderentity(void)
+{
+	extern int	Sbar_ColorForMap (int m);
+	vec3_t tmp;
+	size_t entnum = G_FLOAT(OFS_PARM0);
+	enum getrenderentityfield_e fldnum = G_FLOAT(OFS_PARM1);
+	if (qcvm->nogameaccess)
+	{
+		G_FLOAT(OFS_RETURN+0) = 0;
+		G_FLOAT(OFS_RETURN+1) = 0;
+		G_FLOAT(OFS_RETURN+2) = 0;
+		Con_Printf("PF_getrenderentity: not permitted\n");
+		return;
+	}
+	if (fldnum == GE_MAXENTS)
+		G_FLOAT(OFS_RETURN+0) = cl.num_entities;
+	else if (entnum >= cl.num_entities || !cl.entities[entnum].model)
+	{
+		G_FLOAT(OFS_RETURN+0) = 0;
+		G_FLOAT(OFS_RETURN+1) = 0;
+		G_FLOAT(OFS_RETURN+2) = 0;
+	}
+	else switch(fldnum)
+	{
+	case GE_ACTIVE:
+		G_FLOAT(OFS_RETURN+0) = true;
+		break;
+	case GE_ORIGIN:
+		VectorCopy(cl.entities[entnum].origin, G_VECTOR(OFS_RETURN));
+		break;
+	case GE_ORIGINANDVECTORS:
+		VectorCopy(cl.entities[entnum].origin, G_VECTOR(OFS_RETURN));
+		VectorCopy(cl.entities[entnum].angles, tmp);
+		if (cl.entities[entnum].model->type == mod_alias)
+			tmp[0] *= -1;
+		AngleVectors(tmp, pr_global_struct->v_forward, pr_global_struct->v_right, pr_global_struct->v_up);
+		break;
+	case GE_FORWARD:
+		VectorCopy(cl.entities[entnum].angles, tmp);
+		if (cl.entities[entnum].model->type == mod_alias)
+			tmp[0] *= -1;
+		AngleVectors(tmp, G_VECTOR(OFS_RETURN), tmp, tmp);
+		break;
+	case GE_RIGHT:
+		VectorCopy(cl.entities[entnum].angles, tmp);
+		if (cl.entities[entnum].model->type == mod_alias)
+			tmp[0] *= -1;
+		AngleVectors(tmp, tmp, G_VECTOR(OFS_RETURN), tmp);
+		break;
+	case GE_UP:
+		VectorCopy(cl.entities[entnum].angles, tmp);
+		if (cl.entities[entnum].model->type == mod_alias)
+			tmp[0] *= -1;
+		AngleVectors(tmp, tmp, tmp, G_VECTOR(OFS_RETURN));
+		break;
+	case GE_SCALE:
+		G_FLOAT(OFS_RETURN+0) = cl.entities[entnum].netstate.scale/16.0;
+		break;
+	case GE_ALPHA:
+		G_FLOAT(OFS_RETURN+0) = ENTALPHA_DECODE(cl.entities[entnum].alpha);
+		break;
+	case GE_COLORMOD:
+		G_FLOAT(OFS_RETURN+0) = cl.entities[entnum].netstate.colormod[0] / 32.0;
+		G_FLOAT(OFS_RETURN+1) = cl.entities[entnum].netstate.colormod[1] / 32.0;
+		G_FLOAT(OFS_RETURN+2) = cl.entities[entnum].netstate.colormod[2] / 32.0;
+		break;
+	case GE_PANTSCOLOR:
+		{
+			int palidx = cl.entities[entnum].netstate.colormap;
+			byte *pal;
+			if (!(cl.entities[entnum].netstate.eflags & EFLAGS_COLOURMAPPED))
+				palidx = cl.scores[palidx].colors;
+			pal = (byte *)d_8to24table + 4*Sbar_ColorForMap(palidx&0x0f);
+			G_FLOAT(OFS_RETURN+0) = pal[0] / 255.0;
+			G_FLOAT(OFS_RETURN+1) = pal[1] / 255.0;
+			G_FLOAT(OFS_RETURN+2) = pal[2] / 255.0;
+		}
+		break;
+	case GE_SHIRTCOLOR:
+		{
+			int palidx = cl.entities[entnum].netstate.colormap;
+			byte *pal;
+			if (!(cl.entities[entnum].netstate.eflags & EFLAGS_COLOURMAPPED))
+				palidx = cl.scores[palidx].colors;
+			pal = (byte *)d_8to24table + 4*Sbar_ColorForMap(palidx&0xf0);
+			G_FLOAT(OFS_RETURN+0) = pal[0] / 255.0;
+			G_FLOAT(OFS_RETURN+1) = pal[1] / 255.0;
+			G_FLOAT(OFS_RETURN+2) = pal[2] / 255.0;
+		}
+		break;
+	case GE_SKIN:
+		G_FLOAT(OFS_RETURN+0) = cl.entities[entnum].skinnum;
+		break;
+//	case GE_MINS:
+//	case GE_MAXS:
+//	case GE_ABSMIN:
+//	case GE_ABSMAX:
+//	case GE_LIGHT:
+	case GE_MAXENTS:
+//	default:
+		Con_Printf("PF_cl_getrenderentity(,%i): not implemented\n", fldnum);
+		break;
+	}
 }
 
 //A quick note on number ranges.
@@ -6012,8 +6827,8 @@ static struct
 #define PF_FullCSQCOnly NULL
 #define PF_NoMenu NULL,0
 {
-	{"setmodel",		PF_NoSSQC,			PF_FullCSQCOnly,	3,		PF_m_setmodel,		90, "void(entity ent, string modelname)", ""},
-	{"precache_model",	PF_NoSSQC,			PF_FullCSQCOnly,	20,		PF_m_precache_model,91, "string(string modelname)", ""},
+	{"setmodel",		PF_NoSSQC,			PF_NoCSQC,			3,	PF_m_setmodel,		90, "void(entity ent, string modelname)", ""},
+	{"precache_model",	PF_NoSSQC,			PF_NoCSQC,			20,	PF_m_precache_model,91, "string(string modelname)", ""},
 
 	{"vectoangles2",	PF_ext_vectoangles,	PF_ext_vectoangles,	51,	PF_NoMenu, D("vector(vector fwd, optional vector up)", "Returns the angles (+x=UP) required to orient an entity to look in the given direction. The 'up' argument is required if you wish to set a roll angle, otherwise it will be limited to just monster-style turning.")},
 	{"sin",				PF_Sin,				PF_Sin,				60,	PF_Sin,38, "float(float angle)"},	//60
@@ -6070,7 +6885,7 @@ static struct
 //	{"fork",			PF_Fork,			PF_Fork,			210,	PF_NoMenu, D("float(optional float sleeptime)", "When called, this builtin simply returns. Twice.\nThe current 'thread' will return instantly with a return value of 0. The new 'thread' will return after sleeptime seconds with a return value of 1. See documentation for the 'sleep' builtin for limitations/requirements concerning the new thread. Note that QC should probably call abort in the new thread, as otherwise the function will return to the calling qc function twice also.")},
 //	{"abort",			PF_Abort,			PF_Abort,			211,	PF_NoMenu, D("void(optional __variant ret)", "QC execution is aborted. Parent QC functions on the stack will be skipped, effectively this forces all QC functions to 'return ret' until execution returns to the engine. If ret is ommited, it is assumed to be 0.")},
 //	{"sleep",			PF_Sleep,			PF_Sleep,			212,	PF_NoMenu, D("void(float sleeptime)", "Suspends the current QC execution thread for 'sleeptime' seconds.\nOther QC functions can and will be executed in the interim, including changing globals and field state (but not simultaneously).\nThe self and other globals will be restored when the thread wakes up (or set to world if they were removed since the thread started sleeping). Locals will be preserved, but will not be protected from remove calls.\nIf the engine is expecting the QC to return a value (even in the parent/root function), the value 0 shall be used instead of waiting for the qc to resume.")},
-//	{"forceinfokey",	PF_ForceInfoKey,	PF_NoCSQC,			213,	PF_NoMenu, D("void(entity player, string key, string value)", "Directly changes a user's info without pinging off the client. Also allows explicitly setting * keys, including *spectator. Does not affect the user's config or other servers.")},
+	{"forceinfokey",	PF_sv_forceinfokey,	PF_NoCSQC,			213,	PF_NoMenu, D("void(entity player, string key, string value)", "Directly changes a user's info without pinging off the client. Also allows explicitly setting * keys, including *spectator. Does not affect the user's config or other servers.")},
 //	{"chat",			PF_chat,			PF_NoCSQC,			214,	PF_NoMenu, "void(string filename, float starttag, entity edict)"}, //(FTE_NPCCHAT)
 //	{"particle2",		PF_sv_particle2,	PF_cl_particle2,	215,	PF_NoMenu, "void(vector org, vector dmin, vector dmax, float colour, float effect, float count)"},
 //	{"particle3",		PF_sv_particle3,	PF_cl_particle3,	216,	PF_NoMenu, "void(vector org, vector box, float colour, float effect, float count)"},
@@ -6101,7 +6916,7 @@ static struct
 //	{"shaderforname",	PF_Fixme,			PF_Fixme,			238,	PF_NoMenu, D("float(string shadername, optional string defaultshader, ...)", "Caches the named shader and returns a handle to it.\nIf the shader could not be loaded from disk (missing file or ruleset_allow_shaders 0), it will be created from the 'defaultshader' string if specified, or a 'skin shader' default will be used.\ndefaultshader if not empty should include the outer {} that you would ordinarily find in a shader.")},
 	{"te_bloodqw",		PF_sv_te_bloodqw,	NULL,				239,	PF_NoMenu, "void(vector org, float count)"},
 //	{"te_muzzleflash",	PF_te_muzzleflash,	PF_clte_muzzleflash,0,		PF_NoMenu, "void(entity ent)"},
-//	{"checkpvs",		PF_checkpvs,		PF_checkpvs,		240,	PF_NoMenu, "float(vector viewpos, entity entity)"},
+	{"checkpvs",		PF_checkpvs,		PF_checkpvs,		240,	PF_NoMenu, "float(vector viewpos, entity entity)"},
 //	{"matchclientname",	PF_matchclient,		PF_NoCSQC,			241,	PF_NoMenu, "entity(string match, optional float matchnum)"},
 //	{"sendpacket",		PF_SendPacket,		PF_SendPacket,		242,	PF_NoMenu, "void(string destaddress, string content)"},// (FTE_QC_SENDPACKET)
 //	{"rotatevectorsbytag",PF_Fixme,			PF_Fixme,			244,	PF_NoMenu, "vector(entity ent, float tagnum)"},
@@ -6134,7 +6949,7 @@ static struct
 //	{"processmodelevents",PF_processmodelevents,PF_processmodelevents,0,PF_NoMenu, D("void(float modidx, float framenum, __inout float basetime, float targettime, void(float timestamp, int code, string data) callback)", "Calls a callback for each event that has been reached. Basetime is set to targettime.")},
 //	{"getnextmodelevent",PF_getnextmodelevent,PF_getnextmodelevent,0,	PF_NoMenu, D("float(float modidx, float framenum, __inout float basetime, float targettime, __out int code, __out string data)", "Reports the next event within a model's animation. Returns a boolean if an event was found between basetime and targettime. Writes to basetime,code,data arguments (if an event was found, basetime is set to the event's time, otherwise to targettime).\nWARNING: this builtin cannot deal with multiple events with the same timestamp (only the first will be reported).")},
 //	{"getmodeleventidx",PF_getmodeleventidx,PF_getmodeleventidx,0,		PF_NoMenu, D("float(float modidx, float framenum, int eventidx, __out float timestamp, __out int code, __out string data)", "Reports an indexed event within a model's animation. Writes to timestamp,code,data arguments on success. Returns false if the animation/event/model was out of range/invalid. Does not consider looping animations (retry from index 0 if it fails and you know that its a looping animation). This builtin is more annoying to use than getnextmodelevent, but can be made to deal with multiple events with the exact same timestamp.")},
-///	{"touchtriggers",	PF_touchtriggers,	PF_touchtriggers,	279,	PF_NoMenu, D("void(optional entity ent, optional vector neworigin)", "Triggers a touch events between self and every SOLID_TRIGGER entity that it is in contact with. This should typically just be the triggers touch functions. Also optionally updates the origin of the moved entity.")},//
+	{"touchtriggers",	PF_touchtriggers,	PF_touchtriggers,	279,	PF_NoMenu, D("void(optional entity ent, optional vector neworigin)", "Triggers a touch events between self and every SOLID_TRIGGER entity that it is in contact with. This should typically just be the triggers touch functions. Also optionally updates the origin of the moved entity.")},//
 	{"WriteFloat",		PF_WriteFloat,		PF_NoCSQC,			280,	PF_NoMenu, "void(float buf, float fl)"},
 //	{"skel_ragupdate",	PF_skel_ragedit,	PF_skel_ragedit,	281,	PF_NoMenu, D("float(entity skelent, string dollcmd, float animskel)", "Updates the skeletal object attached to the entity according to its origin and other properties.\nif animskel is non-zero, the ragdoll will animate towards the bone state in the animskel skeletal object, otherwise they will pick up the model's base pose which may not give nice results.\nIf dollcmd is not set, the ragdoll will update (this should be done each frame).\nIf the doll is updated without having a valid doll, the model's default .doll will be instanciated.\ncommands:\n doll foo.doll : sets up the entity to use the named doll file\n dollstring TEXT : uses the doll file directly embedded within qc, with that extra prefix.\n cleardoll : uninstanciates the doll without destroying the skeletal object.\n animate 0.5 : specifies the strength of the ragdoll as a whole \n animatebody somebody 0.5 : specifies the strength of the ragdoll on a specific body (0 will disable ragdoll animations on that body).\n enablejoint somejoint 1 : enables (or disables) a joint. Disabling joints will allow the doll to shatter.")}, // (FTE_CSQC_RAGDOLL)
 //	{"skel_mmap",		PF_skel_mmap,		PF_skel_mmap,		282,	PF_NoMenu, D("float*(float skel)", "Map the bones in VM memory. They can then be accessed via pointers. Each bone is 12 floats, the four vectors interleaved (sadly).")},// (FTE_QC_RAGDOLL)
@@ -6155,20 +6970,20 @@ static struct
 //	{"clustertransfer",	PF_clustertransfer,	PF_NoCSQC,			0,		PF_NoMenu, D("string(entity player, optional string newnode)", "Only functions in mapcluster mode. Initiate transfer of the player to a different node. Can take some time. If dest is specified, returns null on error. Otherwise returns the current/new target node (or null if not transferring).")},
 //	{"modelframecount", PF_modelframecount, PF_modelframecount,	0,		PF_NoMenu, D("float(float mdlidx)", "Retrieves the number of frames in the specified model.")},
 
-	{"clearscene",		PF_NoSSQC,			PF_FullCSQCOnly,	300,	PF_m_clearscene,300, D("void()", "Forgets all rentities, polygons, and temporary dlights. Resets all view properties to their default values.")},// (EXT_CSQC)
-//	{"addentities",		PF_NoSSQC,			PF_FullCSQCOnly,	301,	PF_NoMenu, D("void(float mask)", "Walks through all entities effectively doing this:\n if (ent.drawmask&mask){ if (!ent.predaw()) addentity(ent); }\nIf mask&MASK_DELTA, non-csqc entities, particles, and related effects will also be added to the rentity list.\n If mask&MASK_STDVIEWMODEL then the default view model will also be added.")},// (EXT_CSQC)
-	{"addentity",		PF_NoSSQC,			PF_FullCSQCOnly,	302,	PF_m_addentity,302, D("void(entity ent)", "Copies the entity fields into a new rentity for later rendering via addscene.")},// (EXT_CSQC)
+	{"clearscene",		PF_NoSSQC,			PF_m_clearscene,	300,	PF_m_clearscene,300, D("void()", "Forgets all rentities, polygons, and temporary dlights. Resets all view properties to their default values.")},// (EXT_CSQC)
+	{"addentities",		PF_NoSSQC,			PF_cs_addentities,	301,	PF_NoMenu, D("void(float mask)", "Walks through all entities effectively doing this:\n if (ent.drawmask&mask){ if (!ent.predaw()) addentity(ent); }\nIf mask&MASK_DELTA, non-csqc entities, particles, and related effects will also be added to the rentity list.\n If mask&MASK_STDVIEWMODEL then the default view model will also be added.")},// (EXT_CSQC)
+	{"addentity",		PF_NoSSQC,			PF_cs_addentity,	302,	PF_m_addentity,302, D("void(entity ent)", "Copies the entity fields into a new rentity for later rendering via addscene.")},// (EXT_CSQC)
 //	{"removeentity",	PF_NoSSQC,			PF_FullCSQCOnly,	0,		PF_NoMenu, D("void(entity ent)", "Undoes all addentities added to the scene from the given entity, without removing ALL entities (useful for splitscreen/etc, readd modified versions as desired).")},// (EXT_CSQC)
 //	{"addtrisoup_simple",PF_NoSSQC,			PF_FullCSQCOnly,	0,		PF_NoMenu, D("typedef float vec2[2];\ntypedef float vec3[3];\ntypedef float vec4[4];\ntypedef struct trisoup_simple_vert_s {vec3 xyz;vec2 st;vec4 rgba;} trisoup_simple_vert_t;\nvoid(string texturename, int flags, struct trisoup_simple_vert_s *verts, int *indexes, int numindexes)", "Adds the specified trisoup into the scene as additional geometry. This permits caching geometry to reduce builtin spam. Indexes are a triangle list (so eg quads will need 6 indicies to form two triangles). NOTE: this is not going to be a speedup over polygons if you're still generating lots of new data every frame.")},
-	{"setproperty",		PF_NoSSQC,			PF_FullCSQCOnly,	303,	PF_m_setproperty,303, D("#define setviewprop setproperty\nfloat(float property, ...)", "Allows you to override default view properties like viewport, fov, and whether the engine hud will be drawn. Different VF_ values have slightly different arguments, some are vectors, some floats.")},// (EXT_CSQC)
-	{"renderscene",		PF_NoSSQC,			PF_FullCSQCOnly,	304,	PF_m_renderscene,304, D("void()", "Draws all entities, polygons, and particles on the rentity list (which were added via addentities or addentity), using the various view properties set via setproperty. There is no ordering dependancy.\nThe scene must generally be cleared again before more entities are added, as entities will persist even over to the next frame.\nYou may call this builtin multiple times per frame, but should only be called from CSQC_UpdateView.")},// (EXT_CSQC)
-//	{"dynamiclight_add",PF_NoSSQC,			PF_FullCSQCOnly,	305,	PF_NoMenu, D("float(vector org, float radius, vector lightcolours, optional float style, optional string cubemapname, optional float pflags)", "Adds a temporary dlight, ready to be drawn via addscene. Cubemap orientation will be read from v_forward/v_right/v_up.")},// (EXT_CSQC)
+	{"setproperty",		PF_NoSSQC,			PF_m_setproperty,	303,	PF_m_setproperty,303, D("#define setviewprop setproperty\nfloat(float property, ...)", "Allows you to override default view properties like viewport, fov, and whether the engine hud will be drawn. Different VF_ values have slightly different arguments, some are vectors, some floats.")},// (EXT_CSQC)
+	{"renderscene",		PF_NoSSQC,			PF_m_renderscene,	304,	PF_m_renderscene,304, D("void()", "Draws all entities, polygons, and particles on the rentity list (which were added via addentities or addentity), using the various view properties set via setproperty. There is no ordering dependancy.\nThe scene must generally be cleared again before more entities are added, as entities will persist even over to the next frame.\nYou may call this builtin multiple times per frame, but should only be called from CSQC_UpdateView.")},// (EXT_CSQC)
+	{"dynamiclight_add",PF_NoSSQC,			PF_cs_addlight,		305,	PF_NoMenu, D("float(vector org, float radius, vector lightcolours, optional float style, optional string cubemapname, optional float pflags)", "Adds a temporary dlight, ready to be drawn via addscene. Cubemap orientation will be read from v_forward/v_right/v_up.")},// (EXT_CSQC)
 	{"R_BeginPolygon",	PF_NoSSQC,			PF_R_PolygonBegin,	306,	PF_R_PolygonBegin,	306, D("void(string texturename, optional float flags, optional float is2d)", "Specifies the shader to use for the following polygons, along with optional flags.\nIf is2d, the polygon will be drawn as soon as the EndPolygon call is made, rather than waiting for renderscene. This allows complex 2d effects.")},// (EXT_CSQC_???)
 	{"R_PolygonVertex",	PF_NoSSQC,			PF_R_PolygonVertex,	307,	PF_R_PolygonVertex,	307, D("void(vector org, vector texcoords, vector rgb, float alpha)", "Specifies a polygon vertex with its various properties.")},// (EXT_CSQC_???)
 	{"R_EndPolygon",	PF_NoSSQC,			PF_R_PolygonEnd,	308,	PF_R_PolygonEnd,	308, D("void()", "Ends the current polygon. At least 3 verticies must have been specified. You do not need to call beginpolygon if you wish to draw another polygon with the same shader.")},
-//	{"getproperty",		PF_NoSSQC,			PF_FullCSQCOnly,	309,	PF_NoMenu, D("#define getviewprop getproperty\n__variant(float property)", "Retrieve a currently-set (typically view) property, allowing you to read the current viewport or other things. Due to cheat protection, certain values may be unretrievable.")},// (EXT_CSQC_1)
-//	{"unproject",		PF_NoSSQC,			PF_FullCSQCOnly,	310,	PF_NoMenu, D("vector (vector v)", "Transform a 2d screen-space point (with depth) into a 3d world-space point, according the various origin+angle+fov etc settings set via setproperty.")},// (EXT_CSQC)
-//	{"project",			PF_NoSSQC,			PF_FullCSQCOnly,	311,	PF_NoMenu, D("vector (vector v)", "Transform a 3d world-space point into a 2d screen-space point, according the various origin+angle+fov etc settings set via setproperty.")},// (EXT_CSQC)
+	{"getproperty",		PF_NoSSQC,			PF_m_getproperty,	309,	PF_m_getproperty,	309, D("#define getviewprop getproperty\n__variant(float property)", "Retrieve a currently-set (typically view) property, allowing you to read the current viewport or other things. Due to cheat protection, certain values may be unretrievable.")},// (EXT_CSQC_1)
+//	{"unproject",		PF_NoSSQC,			PF_cl_unproject,	310,	PF_NoMenu, D("vector (vector v)", "Transform a 2d screen-space point (with depth) into a 3d world-space point, according the various origin+angle+fov etc settings set via setproperty.")},// (EXT_CSQC)
+//	{"project",			PF_NoSSQC,			PF_cl_project,		311,	PF_NoMenu, D("vector (vector v)", "Transform a 3d world-space point into a 2d screen-space point, according the various origin+angle+fov etc settings set via setproperty.")},// (EXT_CSQC)
 //	{"drawtextfield",	PF_NoSSQC,			PF_FullCSQCOnly,	0,		PF_NoMenu, D("void(vector pos, vector size, float alignflags, string text)", "Draws a multi-line block of text, including word wrapping and alignment. alignflags bits are RTLB, typically 3.")},// (EXT_CSQC)
 //	{"drawline",		PF_NoSSQC,			PF_FullCSQCOnly,	315,	PF_NoMenu, D("void(float width, vector pos1, vector pos2, vector rgb, float alpha, optional float drawflag)", "Draws a 2d line between the two 2d points.")},// (EXT_CSQC)
 	{"iscachedpic",		PF_NoSSQC,			PF_cl_iscachedpic,	316,	PF_cl_iscachedpic,451,		D("float(string name)", "Checks to see if the image is currently loaded. Engines might lie, or cache between maps.")},// (EXT_CSQC)
@@ -6206,20 +7021,20 @@ static struct
 	{"setcursormode",	PF_NoSSQC,			PF_cl_setcursormode,343,	PF_cl_setcursormode,343, D("void(float usecursor, optional string cursorimage, optional vector hotspot, optional float scale)", "Pass TRUE if you want the engine to release the mouse cursor (absolute input events + touchscreen mode). Pass FALSE if you want the engine to grab the cursor (relative input events + standard looking). If the image name is specified, the engine will use that image for a cursor (use an empty string to clear it again), in a way that will not conflict with the console. Images specified this way will be hardware accelerated, if supported by the platform/port.")},
 	{"getcursormode",	PF_NoSSQC,			PF_cl_getcursormode,0,		PF_cl_getcursormode,0, D("float(float effective)", "Reports the cursor mode this module previously attempted to use. If 'effective' is true, reports the cursor mode currently active (if was overriden by a different module which has precidence, for instance, or if there is only a touchscreen and no mouse).")},
 	{"getmousepos",		PF_NoSSQC,			PF_NoCSQC,	344,	PF_m_getmousepos,66, D("vector()", "Nasty convoluted DP extension. Typically returns deltas instead of positions. Use CSQC_InputEvent for such things in csqc mods.")},	// #344 This is a DP extension
-//	{"getinputstate",	PF_NoSSQC,			PF_FullCSQCOnly,	345,	PF_NoMenu, D("float(float inputsequencenum)", "Looks up an input frame from the log, setting the input_* globals accordingly.\nThe sequence number range used for prediction should normally be servercommandframe < sequence <= clientcommandframe.\nThe sequence equal to clientcommandframe will change between input frames.")},// (EXT_CSQC)
+	{"getinputstate",	PF_NoSSQC,			PF_cs_getinputstate,345,	PF_NoMenu, D("float(float inputsequencenum)", "Looks up an input frame from the log, setting the input_* globals accordingly.\nThe sequence number range used for prediction should normally be servercommandframe < sequence <= clientcommandframe.\nThe sequence equal to clientcommandframe will change between input frames.")},// (EXT_CSQC)
 	{"setsensitivityscaler",PF_NoSSQC,		PF_cl_setsensitivity,346,	PF_NoMenu, D("void(float sens)", "Temporarily scales the player's mouse sensitivity based upon something like zoom, avoiding potential cvar saving and thus corruption.")},// (EXT_CSQC)
 //	{"runstandardplayerphysics",NULL,		PF_FullCSQCOnly,	347,	PF_NoMenu, D("void(entity ent)", "Perform the engine's standard player movement prediction upon the given entity using the input_* globals to describe movement.")},
 	{"getplayerkeyvalue",NULL,				PF_cl_playerkey_s,	348,	PF_NoMenu, D("string(float playernum, string keyname)", "Look up a player's userinfo, to discover things like their name, topcolor, bottomcolor, skin, team, *ver.\nAlso includes scoreboard info like frags, ping, pl, userid, entertime, as well as voipspeaking and voiploudness.")},// (EXT_CSQC)
 	{"getplayerkeyfloat",NULL,				PF_cl_playerkey_f,	0,		PF_NoMenu, D("float(float playernum, string keyname, optional float assumevalue)", "Cheaper version of getplayerkeyvalue that avoids the need for so many tempstrings.")},
 	{"isdemo",			PF_NoSSQC,			PF_cl_isdemo,		349,	PF_cl_isdemo,349, D("float()", "Returns if the client is currently playing a demo or not")},// (EXT_CSQC)
 	{"isserver",		PF_NoSSQC,			PF_cl_isserver,		350,	PF_cl_isserver,60, D("float()", "Returns if the client is acting as the server (aka: listen server)")},//(EXT_CSQC)
-//	{"SetListener",		NULL,				PF_FullCSQCOnly,	351,	PF_NoMenu, D("void(vector origin, vector forward, vector right, vector up, optional float reverbtype)", "Sets the position of the view, as far as the audio subsystem is concerned. This should be called once per CSQC_UpdateView as it will otherwise revert to default. For reverbtype, see setup_reverb or treat as 'underwater'.")},// (EXT_CSQC)
+	{"SetListener",		NULL,				PF_cs_setlistener,	351,	PF_NoMenu, D("void(vector origin, vector forward, vector right, vector up, optional float reverbtype)", "Sets the position of the view, as far as the audio subsystem is concerned. This should be called once per CSQC_UpdateView as it will otherwise revert to default. For reverbtype, see setup_reverb or treat as 'underwater'.")},// (EXT_CSQC)
 //	{"setup_reverb",	PF_NoSSQC,			PF_FullCSQCOnly,	0,		PF_NoMenu, D("typedef struct {\n\tfloat flDensity;\n\tfloat flDiffusion;\n\tfloat flGain;\n\tfloat flGainHF;\n\tfloat flGainLF;\n\tfloat flDecayTime;\n\tfloat flDecayHFRatio;\n\tfloat flDecayLFRatio;\n\tfloat flReflectionsGain;\n\tfloat flReflectionsDelay;\n\tvector flReflectionsPan;\n\tfloat flLateReverbGain;\n\tfloat flLateReverbDelay;\n\tvector flLateReverbPan;\n\tfloat flEchoTime;\n\tfloat flEchoDepth;\n\tfloat flModulationTime;\n\tfloat flModulationDepth;\n\tfloat flAirAbsorptionGainHF;\n\tfloat flHFReference;\n\tfloat flLFReference;\n\tfloat flRoomRolloffFactor;\n\tint   iDecayHFLimit;\n} reverbinfo_t;\nvoid(float reverbslot, reverbinfo_t *reverbinfo, int sizeofreverinfo_t)", "Reconfigures a reverb slot for weird effects. Slot 0 is reserved for no effects. Slot 1 is reserved for underwater effects. Reserved slots will be reinitialised on snd_restart, but can otherwise be changed. These reverb slots can be activated with SetListener. Note that reverb will currently only work when using OpenAL.")},
 	{"registercommand",	NULL,				PF_cl_registercommand,352,	PF_cl_registercommand,352, D("void(string cmdname)", "Register the given console command, for easy console use.\nConsole commands that are later used will invoke CSQC_ConsoleCommand.")},//(EXT_CSQC)
 	{"wasfreed",		PF_WasFreed,		PF_WasFreed,		353,	PF_WasFreed,353, D("float(entity ent)", "Quickly check to see if the entity is currently free. This function is only valid during the two-second non-reuse window, after that it may give bad results. Try one second to make it more robust.")},//(EXT_CSQC) (should be availabe on server too)
 	{"serverkey",		NULL,				PF_cl_serverkey_s,	354,	PF_NoMenu, D("string(string key)", "Look up a key in the server's public serverinfo string")},//
 	{"serverkeyfloat",	NULL,				PF_cl_serverkey_f,	0,		PF_NoMenu, D("float(string key, optional float assumevalue)", "Version of serverkey that returns the value as a float (which avoids tempstrings).")},//
-//	{"getentitytoken",	NULL,				PF_FullCSQCOnly,	355,	PF_NoMenu, D("string(optional string resetstring)", "Grab the next token in the map's entity lump.\nIf resetstring is not specified, the next token will be returned with no other sideeffects.\nIf empty, will reset from the map before returning the first token, probably {.\nIf not empty, will tokenize from that string instead.\nAlways returns tempstrings.")},//;
+	{"getentitytoken",	PF_NoSSQC,			PF_cs_getentitytoken,355,	PF_NoMenu, D("string(optional string resetstring)", "Grab the next token in the map's entity lump.\nIf resetstring is not specified, the next token will be returned with no other sideeffects.\nIf empty, will reset from the map before returning the first token, probably {.\nIf not empty, will tokenize from that string instead.\nAlways returns tempstrings.")},//;
 //	{"findfont",		PF_NoSSQC,			PF_FullCSQCOnly,	356,	PF_NoMenu, D("float(string s)", "Looks up a named font slot. Matches the actual font name as a last resort.")},//;
 //	{"loadfont",		PF_NoSSQC,			PF_FullCSQCOnly,	357,	PF_NoMenu, D("float(string fontname, string fontmaps, string sizes, float slot, optional float fix_scale, optional float fix_voffset)", "too convoluted for me to even try to explain correct usage. Try drawfont = loadfont(\"\", \"cour\", \"16\", -1, 0, 0); to switch to the courier font (optimised for 16 virtual pixels high), if you have the freetype2 library in windows..")},
 	{"sendevent",		PF_NoSSQC,			PF_cl_sendevent,	359,	PF_NoMenu, D("void(string evname, string evargs, ...)", "Invoke Cmd_evname_evargs in ssqc. evargs must be a string of initials refering to the types of the arguments to pass. v=vector, e=entity(.entnum field is sent), f=float, i=int. 6 arguments max - you can get more if you pack your floats into vectors.")},// (EXT_CSQC_1)
@@ -6257,8 +7072,8 @@ static struct
 
 	{"copyentity",		PF_copyentity,		PF_copyentity,		400,	PF_copyentity,47, D("entity(entity from, optional entity to)", "Copies all fields from one entity to another.")},// (DP_QC_COPYENTITY)
 	{"setcolors",		PF_setcolors,		PF_NoCSQC,			401,	PF_NoMenu, D("void(entity ent, float colours)", "Changes a player's colours. The bits 0-3 are the lower/trouser colour, bits 4-7 are the upper/shirt colours.")},//DP_SV_SETCOLOR
-	{"findchain",		PF_findchain,		PF_findchain,		402,	PF_findchain,26, "entity(.string field, string match)"},// (DP_QC_FINDCHAIN)
-	{"findchainfloat",	PF_findchainfloat,	PF_findchainfloat,	403,	PF_findchainfloat,27, "entity(.float fld, float match)"},// (DP_QC_FINDCHAINFLOAT)
+	{"findchain",		PF_findchain,		PF_findchain,		402,	PF_findchain,26, "entity(.string field, string match, optional .entity chainfield)"},// (DP_QC_FINDCHAIN)
+	{"findchainfloat",	PF_findchainfloat,	PF_findchainfloat,	403,	PF_findchainfloat,27, "entity(.float fld, float match, optional .entity chainfield)"},// (DP_QC_FINDCHAINFLOAT)
 	{"effect",			PF_sv_effect,		NULL,				404,	PF_NoMenu, D("void(vector org, string modelname, float startframe, float endframe, float framerate)", "stub. Spawns a self-animating sprite")},// (DP_SV_EFFECT)
 	{"te_blood",		PF_sv_te_blooddp,	NULL,				405,	PF_NoMenu, "void(vector org, vector dir, float count)"},// #405 te_blood
 	{"te_bloodshower",	PF_sv_te_bloodshower,NULL,				406,	PF_NoMenu, "void(vector mincorner, vector maxcorner, float explosionspeed, float howmany)", "stub."},// (DP_TE_BLOODSHOWER)
@@ -6273,20 +7088,20 @@ static struct
 	{"te_explosionquad",PF_sv_te_explosionquad,NULL,			415,	PF_NoMenu, "void(vector org)", "stub."},// (DP_TE_QUADEFFECTS1)
 	{"te_smallflash",	PF_sv_te_smallflash,NULL,				416,	PF_NoMenu, "void(vector org)", "stub."},// (DP_TE_SMALLFLASH)
 	{"te_customflash",	PF_sv_te_customflash,NULL,				417,	PF_NoMenu, "void(vector org, float radius, float lifetime, vector color)", "stub."},// (DP_TE_CUSTOMFLASH)
-	{"te_gunshot",		PF_sv_te_gunshot,	NULL,				418,	PF_NoMenu, "void(vector org, optional float count)"},// #418 te_gunshot
-	{"te_spike",		PF_sv_te_spike,		NULL,				419,	PF_NoMenu, "void(vector org)"},// #419 te_spike
-	{"te_superspike",	PF_sv_te_superspike,NULL,				420,	PF_NoMenu, "void(vector org)"},// #420 te_superspike
-	{"te_explosion",	PF_sv_te_explosion,	NULL,				421,	PF_NoMenu, "void(vector org)"},// #421 te_explosion
-	{"te_tarexplosion",	PF_sv_te_tarexplosion,NULL,				422,	PF_NoMenu, "void(vector org)"},// #422 te_tarexplosion
-	{"te_wizspike",		PF_sv_te_wizspike,	NULL,				423,	PF_NoMenu, "void(vector org)"},// #423 te_wizspike
-	{"te_knightspike",	PF_sv_te_knightspike,NULL,				424,	PF_NoMenu, "void(vector org)"},// #424 te_knightspike
-	{"te_lavasplash",	PF_sv_te_lavasplash,NULL,				425,	PF_NoMenu, "void(vector org)"},// #425 te_lavasplash
-	{"te_teleport",		PF_sv_te_teleport,	NULL,				426,	PF_NoMenu, "void(vector org)"},// #426 te_teleport
-	{"te_explosion2",	PF_sv_te_explosion2,NULL,				427,	PF_NoMenu, "void(vector org, float color, float colorlength)"},// #427 te_explosion2
-	{"te_lightning1",	PF_sv_te_lightning1,NULL,				428,	PF_NoMenu, "void(entity own, vector start, vector end)"},// #428 te_lightning1
-	{"te_lightning2",	PF_sv_te_lightning2,NULL,				429,	PF_NoMenu, "void(entity own, vector start, vector end)"},// #429 te_lightning2
-	{"te_lightning3",	PF_sv_te_lightning3,NULL,				430,	PF_NoMenu, "void(entity own, vector start, vector end)"},// #430 te_lightning3
-	{"te_beam",			PF_sv_te_beam,		NULL,				431,	PF_NoMenu, "void(entity own, vector start, vector end)"},// #431 te_beam
+	{"te_gunshot",		PF_sv_te_gunshot,	PF_cl_te_gunshot,	418,	PF_NoMenu, "void(vector org, optional float count)"},// #418 te_gunshot
+	{"te_spike",		PF_sv_te_spike,		PF_cl_te_spike,		419,	PF_NoMenu, "void(vector org)"},// #419 te_spike
+	{"te_superspike",	PF_sv_te_superspike,PF_cl_te_superspike,420,	PF_NoMenu, "void(vector org)"},// #420 te_superspike
+	{"te_explosion",	PF_sv_te_explosion,	PF_cl_te_explosion,	421,	PF_NoMenu, "void(vector org)"},// #421 te_explosion
+	{"te_tarexplosion",	PF_sv_te_tarexplosion,PF_cl_te_tarexplosion,422,PF_NoMenu, "void(vector org)"},// #422 te_tarexplosion
+	{"te_wizspike",		PF_sv_te_wizspike,	PF_cl_te_wizspike,	423,	PF_NoMenu, "void(vector org)"},// #423 te_wizspike
+	{"te_knightspike",	PF_sv_te_knightspike,PF_cl_te_knightspike,424,	PF_NoMenu, "void(vector org)"},// #424 te_knightspike
+	{"te_lavasplash",	PF_sv_te_lavasplash,PF_cl_te_lavasplash,425,	PF_NoMenu, "void(vector org)"},// #425 te_lavasplash
+	{"te_teleport",		PF_sv_te_teleport,	PF_cl_te_teleport,	426,	PF_NoMenu, "void(vector org)"},// #426 te_teleport
+	{"te_explosion2",	PF_sv_te_explosion2,PF_cl_te_explosion2,427,	PF_NoMenu, "void(vector org, float color, float colorlength)"},// #427 te_explosion2
+	{"te_lightning1",	PF_sv_te_lightning1,PF_cl_te_lightning1,428,	PF_NoMenu, "void(entity own, vector start, vector end)"},// #428 te_lightning1
+	{"te_lightning2",	PF_sv_te_lightning2,PF_cl_te_lightning2,429,	PF_NoMenu, "void(entity own, vector start, vector end)"},// #429 te_lightning2
+	{"te_lightning3",	PF_sv_te_lightning3,PF_cl_te_lightning3,430,	PF_NoMenu, "void(entity own, vector start, vector end)"},// #430 te_lightning3
+	{"te_beam",			PF_sv_te_beam,		PF_cl_te_beam,		431,	PF_NoMenu, "void(entity own, vector start, vector end)"},// #431 te_beam
 	{"vectorvectors",	PF_vectorvectors,	PF_vectorvectors,	432,	PF_NoMenu, "void(vector dir)"},// (DP_QC_VECTORVECTORS)
 	{"te_plasmaburn",	PF_sv_te_plasmaburn,NULL,				433,	PF_NoMenu, "void(vector org)", "stub."},// (DP_TE_PLASMABURN)
 	{"getsurfacenumpoints",PF_getsurfacenumpoints,PF_getsurfacenumpoints,434,PF_NoMenu, "float(entity e, float s)"},// (DP_QC_GETSURFACE)
@@ -6300,7 +7115,7 @@ static struct
 	{"argv",			PF_ArgV,			PF_ArgV,			442,	PF_ArgV,59, "string(float n)"},// (KRIMZON_SV_PARSECLIENTCOMMAND
 	{"argc",			PF_ArgC,			PF_ArgC,			0,		PF_ArgC,0, "float()"},
 	{"setattachment",	PF_setattachment,	PF_setattachment,	443,	PF_NoMenu, "void(entity e, entity tagentity, string tagname)", ""},// (DP_GFX_QUAKE3MODELTAGS)
-	{"search_begin",	PF_search_begin,	PF_search_begin,	444,	PF_search_begin,74, "searchhandle(string pattern, optional float caseinsensitive, optional float quiet)", "initiate a filesystem scan based upon filenames. Be sure to call search_end on the returned handle."},
+	{"search_begin",	PF_search_begin,	PF_search_begin,	444,	PF_search_begin,74, "searchhandle(string pattern, float flags, float quiet, optional string filterpackage)", "initiate a filesystem scan based upon filenames. Be sure to call search_end on the returned handle."},
 	{"search_end",		PF_search_end,		PF_search_end,		445,	PF_search_end,75, "void(searchhandle handle)", ""},
 	{"search_getsize",	PF_search_getsize,	PF_search_getsize,	446,	PF_search_getsize,76, "float(searchhandle handle)", " Retrieves the number of files that were found."},
 	{"search_getfilename",PF_search_getfilename,PF_search_getfilename,447,PF_search_getfilename,77, "string(searchhandle handle, float num)", "Retrieves name of one of the files that was found by the initial search."},
@@ -6309,7 +7124,7 @@ static struct
 	{"search_getpackagename",PF_search_getpackagename,PF_search_getpackagename,0,PF_search_getpackagename,0, "string(searchhandle handle, float num)", "Retrieves the name of the package the file was found inside."},
 	{"cvar_string",		PF_cvar_string,		PF_cvar_string,		448,	PF_cvar_string,71, "string(string cvarname)"},//DP_QC_CVAR_STRING
 	{"findflags",		PF_findflags,		PF_findflags,		449,	PF_findflags,0, "entity(entity start, .float fld, float match)"},//DP_QC_FINDFLAGS
-	{"findchainflags",	PF_findchainflags,	PF_findchainflags,	450,	PF_NoMenu, "entity(.float fld, float match)"},//DP_QC_FINDCHAINFLAGS
+	{"findchainflags",	PF_findchainflags,	PF_findchainflags,	450,	PF_NoMenu, "entity(.float fld, float match, optional .entity chainfield)"},//DP_QC_FINDCHAINFLAGS
 	{"dropclient",		PF_dropclient,		PF_NoCSQC,			453,	PF_NoMenu, "void(entity player)"},//DP_SV_BOTCLIENT
 	{"spawnclient",		PF_spawnclient,		PF_NoCSQC,			454,	PF_NoMenu, "entity()", "Spawns a dummy player entity.\nNote that such dummy players will be carried from one map to the next.\nWarning: DP_SV_CLIENTCOLORS DP_SV_CLIENTNAME are not implemented in quakespasm, so use KRIMZON_SV_PARSECLIENTCOMMAND's clientcommand builtin to change the bot's name/colours/skin/team/etc, in the same way that clients would ask."},//DP_SV_BOTCLIENT
 	{"clienttype",		PF_clienttype,		PF_NoCSQC,			455,	PF_NoMenu, "float(entity client)"},//botclient
@@ -6353,6 +7168,7 @@ static struct
 	{"getentityfieldstring",PF_getentfldstr,PF_getentfldstr,	499,	PF_getentfldstr,499, "string(float fieldnum, entity ent)"},//DP_QC_ENTITYDATA
 	{"putentityfieldstring",PF_putentfldstr,PF_putentfldstr,	500,	PF_putentfldstr,500, "float(float fieldnum, entity ent, string s)"},//DP_QC_ENTITYDATA
 	{"whichpack",		PF_whichpack,		PF_whichpack,		503,	PF_whichpack,503, D("string(string filename, optional float makereferenced)", "Returns the pak file name that contains the file specified. progs/player.mdl will generally return something like 'pak0.pak'. If makereferenced is true, clients will automatically be told that the returned package should be pre-downloaded and used, even if allow_download_refpackages is not set.")},//DP_QC_WHICHPACK
+	{"getentity",		PF_NoSSQC,			PF_cl_getrenderentity,504,	PF_NoMenu, D("__variant(float entnum, float fieldnum)", "Looks up fields from non-csqc-visible entities. The entity will need to be within the player's pvs. fieldnum should be one of the GE_ constants.")},//DP_CSQC_QUERYRENDERENTITY
 	{"uri_escape",		PF_uri_escape,		PF_uri_escape,		510,	PF_uri_escape,510, "string(string in)"},//DP_QC_URI_ESCAPE
 	{"uri_unescape",	PF_uri_unescape,	PF_uri_unescape,	511,	PF_uri_unescape,511, "string(string in)"},//DP_QC_URI_ESCAPE
 	{"num_for_edict",	PF_num_for_edict,	PF_num_for_edict,	512,	PF_num_for_edict,512, "float(entity ent)"},//DP_QC_NUM_FOR_EDICT
@@ -6379,11 +7195,13 @@ static struct
 	{"getmousetarget",	PF_NoSSQC,			PF_NoCSQC,			604,	PF_m_getmousetarget,604, D("float()", "Returns mouse focus")},
 
 	{"callfunction",	PF_callfunction,	PF_callfunction,			605,PF_callfunction,			605, D("void(.../*, string funcname*/)", "Invokes the named function. The function name is always passed as the last parameter and must always be present. The others are passed to the named function as-is")},
+	{"writetofile",		PF_writetofile,		PF_writetofile,				606,PF_writetofile,				606, D("void(filestream fh, entity e)", "Writes an entity's fields to a frik_file file handle.")},
 	{"isfunction",		PF_isfunction,		PF_isfunction,				607,PF_isfunction,				607, D("float(string s)", "Returns true if the named function exists and can be called with the callfunction builtin.")},
 	{"getresolution",			PF_NoSSQC,	PF_cl_getresolution,		608,PF_cl_getresolution,		608, D("vector(float mode, float forfullscreen)", "Returns available/common video modes.")},
 	{"gethostcachevalue",		PF_NoSSQC,	PF_gethostcachevalue,		611,PF_gethostcachevalue,		611, D("float(float type)", "Returns number of servers known")},
 	{"gethostcachestring",		PF_NoSSQC,	PF_gethostcachestring,		612,PF_gethostcachestring,		612, D("string(float type, float hostnr)", "Retrieves some specific type of info about the specified server.")},
-	{"parseentitydata",	PF_parseentitydata, NULL/*field hacks*/,		613,NULL,						613, D("float(entity e, string s, optional float offset)", "Reads a single entity's fields into an already-spawned entity. s should contain field pairs like in a saved game: {\"foo1\" \"bar\" \"foo2\" \"5\"}. Returns <=0 on failure, otherwise returns the offset in the string that was read to.")},
+	{"parseentitydata",	PF_parseentitydata, PF_parseentitydata,			613,PF_parseentitydata,			613, D("float(entity e, string s, optional float offset)", "Reads a single entity's fields into an already-spawned entity. s should contain field pairs like in a saved game: {\"foo1\" \"bar\" \"foo2\" \"5\"}. Returns <=0 on failure, otherwise returns the offset in the string that was read to.")},
+//	{"generateentitydata",PF_generateentitydata,PF_generateentitydata,	0,	PF_generateentitydata,		0,	 D("string(entity e)", "Dumps the entities fields into a string which can later be parsed with parseentitydata.")},
 	{"resethostcachemasks",		PF_NoSSQC,	PF_resethostcachemasks,		615,PF_resethostcachemasks,		615, D("void()", "Resets server listing filters.")},
 	{"sethostcachemaskstring",	PF_NoSSQC,	PF_sethostcachemaskstring,	616,PF_sethostcachemaskstring,	616, D("void(float mask, float fld, string str, float op)", "stub. Changes a serverlist filter (string comparisons).")},
 	{"sethostcachemasknumber",	PF_NoSSQC,	PF_sethostcachemasknumber,	617,PF_sethostcachemasknumber,	617, D("void(float mask, float fld, float num, float op)", "stub. Changes a serverlist filter (numeric comparisons).")},
@@ -6398,20 +7216,21 @@ static struct
 
 
 //	{"generateentitydata",PF_generateentitydata,NULL,				0,	PF_NoMenu, D("string(entity e)", "Dumps the entities fields into a string which can later be parsed with parseentitydata."}),
-	{"getgamedirinfo",	PF_NoSSQC,			PF_NoCSQC,			626,	PF_getgamedirinfo,626, D("string(float n, float prop)", "Provides a way to enumerate available mod directories.")},
-	{"sprintf",			PF_sprintf,			PF_sprintf,			627,	PF_sprintf,627, "string(string fmt, ...)"},
+	{"getgamedirinfo",	PF_NoSSQC,			PF_getgamedirinfo,			626,	PF_getgamedirinfo,626, D("string(float n, float prop)", "Provides a way to enumerate available mod directories.")},
+	{"sprintf",			PF_sprintf,			PF_sprintf,					627,	PF_sprintf,627, "string(string fmt, ...)"},
 	{"getsurfacenumtriangles",PF_getsurfacenumtriangles,PF_getsurfacenumtriangles,628,PF_NoMenu, "float(entity e, float s)"},
-	{"getsurfacetriangle",PF_getsurfacetriangle,PF_getsurfacetriangle,629,PF_NoMenu, "vector(entity e, float s, float n)"},
-	{"setkeybind",		PF_NoSSQC,			PF_cl_setkeybind,	630,	PF_cl_setkeybind,630, "float(float key, string bind, optional float bindmap)", "Changes a key binding."},
-	{"getbindmaps",		PF_NoSSQC,			PF_cl_getbindmaps,	631,	PF_cl_getbindmaps,631, "vector()", "stub."},
-	{"setbindmaps",		PF_NoSSQC,			PF_cl_setbindmaps,	632,	PF_cl_setbindmaps,632, "float(vector bm)", "stub."},
-	{"digest_hex",		PF_digest_hex,		PF_digest_hex,		639,	PF_digest_hex, 639, "string(string digest, string data, ...)", "stub."},
+	{"getsurfacetriangle",PF_getsurfacetriangle,PF_getsurfacetriangle,	629,	PF_NoMenu, "vector(entity e, float s, float n)"},
+	{"setkeybind",		PF_NoSSQC,			PF_cl_setkeybind,			630,	PF_cl_setkeybind,630, "float(float key, string bind, optional float bindmap, optional float modifier)", "Changes a key binding."},
+	{"getbindmaps",		PF_NoSSQC,			PF_cl_getbindmaps,			631,	PF_cl_getbindmaps,631, "vector()", "stub."},
+	{"setbindmaps",		PF_NoSSQC,			PF_cl_setbindmaps,			632,	PF_cl_setbindmaps,632, "float(vector bm)", "stub."},
+	{"digest_hex",		PF_digest_hex,		PF_digest_hex,				639,	PF_digest_hex, 639, "string(string digest, string data, ...)"},
 };
 
-static const char *extnames[] = 
+static const char *extnames[] =
 {
 	"DP_CON_SET",
 	"DP_CON_SETA",
+	"DP_CSQC_QUERYRENDERENTITY",
 	"DP_EF_NOSHADOW",
 	"DP_ENT_ALPHA",	//already in quakespasm, supposedly.
 	"DP_ENT_COLORMOD",
@@ -6760,9 +7579,12 @@ void PR_EnableExtensions(ddef_t *pr_globaldefs)
 		return;
 	}
 
-	//replace standard builtins with new replacement extended ones.
+#define QCEXTFUNC(n,t) qcvm->extfuncs.n = PR_FindExtFunction(#n);
+	QCEXTFUNCS_COMMON
+
+	//replace standard builtins with new replacement extended ones and selectively populate references to module-specific entrypoints.
 	if (qcvm == &cl.qcvm)
-	{
+	{	//csqc
 		for (i = 0; i < sizeof(extensionbuiltins) / sizeof(extensionbuiltins[0]); i++)
 		{
 			int num = (extensionbuiltins[i].documentednumber);
@@ -6770,17 +7592,11 @@ void PR_EnableExtensions(ddef_t *pr_globaldefs)
 				qcvm->builtins[num] = extensionbuiltins[i].csqcfunc;
 		}
 
-		//csqc entrypoints
-		qcvm->extfuncs.CSQC_Init = PR_FindExtFunction("CSQC_Init");
-		qcvm->extfuncs.CSQC_DrawHud = PR_FindExtFunction("CSQC_DrawHud");
-		qcvm->extfuncs.CSQC_DrawScores = PR_FindExtFunction("CSQC_DrawScores");
-		qcvm->extfuncs.CSQC_InputEvent = PR_FindExtFunction("CSQC_InputEvent");
-		qcvm->extfuncs.CSQC_ConsoleCommand = PR_FindExtFunction("CSQC_ConsoleCommand");
-		qcvm->extfuncs.CSQC_Parse_Event = PR_FindExtFunction("CSQC_Parse_Event");
-		qcvm->extfuncs.CSQC_Parse_Damage = PR_FindExtFunction("CSQC_Parse_Damage");
+		QCEXTFUNCS_GAME
+		QCEXTFUNCS_CS
 	}
 	else if (qcvm == &sv.qcvm)
-	{
+	{	//ssqc
 		for (i = 0; i < sizeof(extensionbuiltins) / sizeof(extensionbuiltins[0]); i++)
 		{
 			int num = (extensionbuiltins[i].documentednumber);
@@ -6788,12 +7604,11 @@ void PR_EnableExtensions(ddef_t *pr_globaldefs)
 				qcvm->builtins[num] = extensionbuiltins[i].ssqcfunc;
 		}
 
-		//ssqc entrypoints
-		qcvm->extfuncs.SV_ParseClientCommand = PR_FindExtFunction("SV_ParseClientCommand");
-		qcvm->extfuncs.EndFrame = PR_FindExtFunction("EndFrame");
+		QCEXTFUNCS_GAME
+		QCEXTFUNCS_SV
 	}
 	else if (qcvm == &cls.menu_qcvm)
-	{
+	{	//menuqc
 		for (i = 0; i < sizeof(extensionbuiltins) / sizeof(extensionbuiltins[0]); i++)
 		{
 			int num = (extensionbuiltins[i].documentednumber_menuqc);
@@ -6801,27 +7616,16 @@ void PR_EnableExtensions(ddef_t *pr_globaldefs)
 				qcvm->builtins[num] = extensionbuiltins[i].menufunc;
 		}
 
-		//menuqc entrypoints
-		qcvm->extfuncs.m_init = PR_FindExtFunction("m_init");
-		qcvm->extfuncs.m_toggle = PR_FindExtFunction("m_toggle");
-		qcvm->extfuncs.m_draw = PR_FindExtFunction("m_draw");
-		qcvm->extfuncs.m_keydown = PR_FindExtFunction("m_keydown");
-		qcvm->extfuncs.m_keyup = PR_FindExtFunction("m_keyup");
-		qcvm->extfuncs.m_consolecommand = PR_FindExtFunction("m_consolecommand");
-		qcvm->extfuncs.Menu_InputEvent = PR_FindExtFunction("Menu_InputEvent");
+		QCEXTFUNCS_MENU
 	}
+#undef QCEXTFUNC
 
-	//general entrypoints
-	qcvm->extfuncs.GameCommand = PR_FindExtFunction("GameCommand");
 
-	qcvm->extglobals.time = PR_FindExtGlobal(ev_float, "time");
-	qcvm->extglobals.frametime = PR_FindExtGlobal(ev_float, "frametime");
-	qcvm->extglobals.cltime = PR_FindExtGlobal(ev_float, "cltime");
-	qcvm->extglobals.maxclients = PR_FindExtGlobal(ev_float, "maxclients");
-	qcvm->extglobals.intermission = PR_FindExtGlobal(ev_float, "intermission");
-	qcvm->extglobals.intermission_time = PR_FindExtGlobal(ev_float, "intermission_time");
-	qcvm->extglobals.player_localnum = PR_FindExtGlobal(ev_float, "player_localnum");
-	qcvm->extglobals.player_localentnum = PR_FindExtGlobal(ev_float, "player_localentnum");
+#define QCEXTGLOBAL_FLOAT(n) qcvm->extglobals.n = PR_FindExtGlobal(ev_float, #n);
+	QCEXTGLOBALS_COMMON
+	QCEXTGLOBALS_GAME
+	QCEXTGLOBALS_CSQC
+#undef QCEXTGLOBAL_FLOAT
 
 	//any #0 functions are remapped to their builtins here, so we don't have to tweak the VM in an obscure potentially-breaking way.
 	for (i = 0; i < (unsigned int)qcvm->progs->numfunctions; i++)
@@ -6867,11 +7671,17 @@ void PR_DumpPlatform_f(void)
 	FILE *f;
 	const char *outname = NULL;
 	unsigned int i, j;
-	int targs = 0;
+	enum
+	{
+		SS=1,
+		CS=2,
+		MN=4,
+	};
+	unsigned int targs = 0;
 	for (i = 1; i < (unsigned)Cmd_Argc(); )
 	{
 		const char *arg = Cmd_Argv(i++);
-		if (!strcmp(arg, "-O"))
+		if (!strncmp(arg, "-O", 2))
 		{
 			if (arg[2])
 				outname = arg+2;
@@ -6879,9 +7689,11 @@ void PR_DumpPlatform_f(void)
 				outname = Cmd_Argv(i++);
 		}
 		else if (!q_strcasecmp(arg, "-Tcs"))
-			targs |= 2;
+			targs |= CS;
 		else if (!q_strcasecmp(arg, "-Tss"))
-			targs |= 1;
+			targs |= SS;
+		else if (!q_strcasecmp(arg, "-Tmenu"))
+			targs |= MN;
 		else
 		{
 			Con_Printf("%s: Unknown argument\n", Cmd_Argv(0));
@@ -6891,7 +7703,7 @@ void PR_DumpPlatform_f(void)
 	if (!outname)
 		outname = ((targs==2)?"qscsextensions":"qsextensions");
 	if (!targs)
-		targs = 3;
+		targs = SS|CS;
 
 	if (strstr(outname, ".."))
 		return;
@@ -6914,18 +7726,39 @@ void PR_DumpPlatform_f(void)
 		"*/\n"
 		,Cmd_Argv(0), Cmd_Args()?Cmd_Args():"with no args");
 
-	fprintf(f, 
+	fprintf(f,
 		"\n\n//This file only supports csqc, so including this file in some other situation is a user error\n"
 		"#if defined(QUAKEWORLD) || defined(MENU)\n"
 		"#error Mixed up module defs\n"
 		"#endif\n"
-		"#ifndef CSQC\n"
-		"#define CSQC\n"
-		"#endif\n"
-		"#ifndef CSQC_SIMPLE\n"	//quakespasm's csqc implementation is simplified, and can do huds+menus, but that's about it.
-		"#define CSQC_SIMPLE\n"
-		"#endif\n"
 		);
+	if (targs & CS)
+	{
+		fprintf(f,
+			"#if !defined(CSQC) && !defined(SSQC) && !defined(MENU)\n"
+				"#define CSQC\n"
+				"#ifndef CSQC_SIMPLE\n"	//quakespasm's csqc implementation is simplified, and can do huds+menus, but that's about it.
+					"#define CSQC_SIMPLE\n"
+				"#endif\n"
+			"#endif\n"
+			);
+	}
+	else if (targs & SS)
+	{
+		fprintf(f,
+			"#if !defined(CSQC) && !defined(SSQC) && !defined(MENU)\n"
+				"#define SSQC\n"
+			"#endif\n"
+			);
+	}
+	else if (targs & MN)
+	{
+		fprintf(f,
+			"#if !defined(CSQC) && !defined(SSQC) && !defined(MENU)\n"
+				"#define MENU\n"
+			"#endif\n"
+			);
+	}
 
 	fprintf(f, "\n\n//List of advertised extensions\n");
 	for (i = 0; i < sizeof(extnames)/sizeof(extnames[0]); i++)
@@ -6934,8 +7767,9 @@ void PR_DumpPlatform_f(void)
 	fprintf(f, "\n\n//Explicitly flag this stuff as probably-not-referenced, meaning fteqcc will shut up about it and silently strip what it can.\n");
 	fprintf(f, "#pragma noref 1\n");
 
-	if (targs & 2)
+	if (targs & (SS|CS))	//qss uses the same system defs for both ssqc and csqc, as a simplification.
 	{	//I really hope that fteqcc's unused variable logic is up to scratch
+		fprintf(f, "#if defined(CSQC_SIMPLE) || defined(SSQC)\n");
 		fprintf(f, "entity		self,other,world;\n");
 		fprintf(f, "float		time,frametime,force_retouch;\n");
 		fprintf(f, "string		mapname;\n");
@@ -6948,7 +7782,7 @@ void PR_DumpPlatform_f(void)
 		fprintf(f, "float		trace_inopen,trace_inwater;\n");
 		fprintf(f, "entity		msg_entity;\n");
 		fprintf(f, "void() 		main,StartFrame,PlayerPreThink,PlayerPostThink,ClientKill,ClientConnect,PutClientInServer,ClientDisconnect,SetNewParms,SetChangeParms;\n");
-		fprintf(f, "void		end_sys_globals;\n");
+		fprintf(f, "void		end_sys_globals;\n\n");
 		fprintf(f, ".float		modelindex;\n");
 		fprintf(f, ".vector		absmin, absmax;\n");
 		fprintf(f, ".float		ltime,movetype,solid;\n");
@@ -6981,6 +7815,15 @@ void PR_DumpPlatform_f(void)
 		fprintf(f, ".float		sounds;\n");
 		fprintf(f, ".string		noise, noise1, noise2, noise3;\n");
 		fprintf(f, "void		end_sys_fields;\n");
+		fprintf(f, "#endif\n");
+	}
+	if (targs & MN)
+	{
+		fprintf(f, "#if defined(MENU)\n");
+		fprintf(f, "entity		self;\n");
+		fprintf(f, "void		end_sys_globals;\n\n");
+		fprintf(f, "void		end_sys_fields;\n");
+		fprintf(f, "#endif\n");
 	}
 
 	fprintf(f, "\n\n//Some custom types (that might be redefined as accessors by fteextensions.qc, although we don't define any methods here)\n");
@@ -6999,44 +7842,67 @@ void PR_DumpPlatform_f(void)
 	fprintf(f, "#endif\n");
 
 
-	if (targs & 1)
+	fprintf(f, "\n\n//Common entry points\n");
+#define QCEXTFUNC(n,t) fprintf(f, t " " #n "\n");
+	QCEXTFUNCS_COMMON
+	if (targs & (SS|CS))
 	{
-		fprintf(f, "void(string cmd) SV_ParseClientCommand;\n");
-		fprintf(f, "void() EndFrame;\n");
+		QCEXTFUNCS_GAME
 	}
 
-	if (targs & 2)
+	if (targs & SS)
 	{
-		fprintf(f, "void(float apilevel, string enginename, float engineversion) CSQC_Init;\n");
-		fprintf(f, "float(string cmdstr) CSQC_ConsoleCommand;\n");
-		fprintf(f, "void(vector virtsize, float showscores) CSQC_DrawHud;\n");
-		fprintf(f, "void(vector virtsize, float showscores) CSQC_DrawScores;\n");
-		fprintf(f, "float(float evtype, float scanx, float chary, float devid) CSQC_InputEvent;\n");
-		fprintf(f, "void() CSQC_Parse_Event;\n");
-		fprintf(f, "float(float save, float take, vector dir) CSQC_Parse_Damage;\n");
+		fprintf(f, "\n\n//Serverside entry points\n");
+		QCEXTFUNCS_SV
 	}
+	if (targs & CS)
+	{
+		fprintf(f, "\n\n//CSQC entry points\n");
+		QCEXTFUNCS_CS
+	}
+	if (targs & MN)
+	{
+		fprintf(f, "\n\n//MenuQC entry points\n");
+		QCEXTFUNCS_MENU
+	}
+#undef QCEXTFUNC
 
-	if (targs & 2)
+#define QCEXTGLOBAL_FLOAT(n) fprintf(f, "float " #n ";\n");
+	QCEXTGLOBALS_COMMON
+	if (targs & (CS|SS))
 	{
-		fprintf(f, "float cltime;				/* increases regardless of pause state or game speed */\n");
-		fprintf(f, "float maxclients;			/* maximum number of players possible on this server */\n");
-		fprintf(f, "float intermission;			/* in intermission */\n");
-		fprintf(f, "float intermission_time;	/* when the intermission started */\n");
-		fprintf(f, "float player_localnum;		/* the player slot that is believed to be assigned to us*/\n");
-		fprintf(f, "float player_localentnum;	/* the entity number that the view is attached to */\n");
+		QCEXTGLOBALS_GAME
 	}
+	if (targs & CS)
+	{
+		QCEXTGLOBALS_CSQC
+	}
+#undef QCEXTGLOBAL
 
 	fprintf(f, "const float FALSE		= 0;\n");
 	fprintf(f, "const float TRUE		= 1;\n");
 
-	if (targs & 2)
+	if (targs & CS)
 	{
-		fprintf(f, "const float IE_KEYDOWN		= %i;\n", CSIE_KEYDOWN);
-		fprintf(f, "const float IE_KEYUP		= %i;\n", CSIE_KEYUP);
-		fprintf(f, "const float IE_MOUSEDELTA	= %i;\n", CSIE_MOUSEDELTA);
-		fprintf(f, "const float IE_MOUSEABS		= %i;\n", CSIE_MOUSEABS);
-		fprintf(f, "const float IE_JOYAXIS		= %i;\n", CSIE_JOYAXIS);
+		fprintf(f, "const float MASK_ENGINE = %i;\n", MASK_ENGINE);
+		fprintf(f, "const float MASK_VIEWMODEL = %i;\n", MASK_VIEWMODEL);
 
+		fprintf(f, "const float GE_MAXENTS = %i;\n", GE_MAXENTS);
+		fprintf(f, "const float GE_ACTIVE = %i;\n", GE_ACTIVE);
+		fprintf(f, "const float GE_ORIGIN = %i;\n", GE_ORIGIN);
+		fprintf(f, "const float GE_FORWARD = %i;\n", GE_FORWARD);
+		fprintf(f, "const float GE_RIGHT = %i;\n", GE_RIGHT);
+		fprintf(f, "const float GE_UP = %i;\n", GE_UP);
+		fprintf(f, "const float GE_SCALE = %i;\n", GE_SCALE);
+		fprintf(f, "const float GE_ORIGINANDVECTORS = %i;\n", GE_ORIGINANDVECTORS);
+		fprintf(f, "const float GE_ALPHA = %i;\n", GE_ALPHA);
+		fprintf(f, "const float GE_COLORMOD = %i;\n", GE_COLORMOD);
+		fprintf(f, "const float GE_PANTSCOLOR = %i;\n", GE_PANTSCOLOR);
+		fprintf(f, "const float GE_SHIRTCOLOR = %i;\n", GE_SHIRTCOLOR);
+		fprintf(f, "const float GE_SKIN = %i;\n", GE_SKIN);
+	}
+	if (targs & (CS|SS))
+	{
 		fprintf(f, "const float STAT_HEALTH = 0;		/* Player's health. */\n");
 //		fprintf(f, "const float STAT_FRAGS = 1;			/* unused */\n");
 		fprintf(f, "const float STAT_WEAPONMODELI = 2;	/* This is the modelindex of the current viewmodel (renamed from the original name 'STAT_WEAPON' due to confusions). */\n");
@@ -7065,10 +7931,154 @@ void PR_DumpPlatform_f(void)
 		fprintf(f, "const float STAT_IDEALPITCH = 25;\n");
 		fprintf(f, "const float STAT_PUNCHANGLE_X = 26;\n");
 		fprintf(f, "const float STAT_PUNCHANGLE_Y = 27;\n");
-		fprintf(f, "const float STAT_PUNCHANGLE_Y = 28;\n");
+		fprintf(f, "const float STAT_PUNCHANGLE_Z = 28;\n");
 //		fprintf(f, "const float STAT_PUNCHVECTOR_X = 29;\n");
 //		fprintf(f, "const float STAT_PUNCHVECTOR_Y = 30;\n");
 //		fprintf(f, "const float STAT_PUNCHVECTOR_Z = 31;\n");
+
+		fprintf(f, "const float SOLID_BBOX = %i;\n", SOLID_BBOX);
+		fprintf(f, "const float SOLID_BSP = %i;\n", SOLID_BSP);
+		fprintf(f, "const float SOLID_NOT = %i;\n", SOLID_NOT);
+		fprintf(f, "const float SOLID_SLIDEBOX = %i;\n", SOLID_SLIDEBOX);
+		fprintf(f, "const float SOLID_TRIGGER = %i;\n", SOLID_TRIGGER);
+
+		fprintf(f, "const float MOVETYPE_NONE = %i;\n", MOVETYPE_NONE);
+		fprintf(f, "const float MOVETYPE_WALK = %i;\n", MOVETYPE_WALK);
+		fprintf(f, "const float MOVETYPE_STEP = %i;\n", MOVETYPE_STEP);
+		fprintf(f, "const float MOVETYPE_FLY = %i;\n", MOVETYPE_FLY);
+		fprintf(f, "const float MOVETYPE_TOSS = %i;\n", MOVETYPE_TOSS);
+		fprintf(f, "const float MOVETYPE_PUSH = %i;\n", MOVETYPE_PUSH);
+		fprintf(f, "const float MOVETYPE_NOCLIP = %i;\n", MOVETYPE_NOCLIP);
+		fprintf(f, "const float MOVETYPE_FLYMISSILE = %i;\n", MOVETYPE_FLYMISSILE);
+		fprintf(f, "const float MOVETYPE_BOUNCE = %i;\n", MOVETYPE_BOUNCE);
+		fprintf(f, "const float MOVETYPE_FOLLOW = %i;\n", MOVETYPE_EXT_FOLLOW);
+
+		fprintf(f, "const float CONTENT_EMPTY = %i;\n", CONTENTS_EMPTY);
+		fprintf(f, "const float CONTENT_SOLID = %i;\n", CONTENTS_SOLID);
+		fprintf(f, "const float CONTENT_WATER = %i;\n", CONTENTS_WATER);
+		fprintf(f, "const float CONTENT_SLIME = %i;\n", CONTENTS_SLIME);
+		fprintf(f, "const float CONTENT_LAVA = %i;\n", CONTENTS_LAVA);
+		fprintf(f, "const float CONTENT_SKY = %i;\n", CONTENTS_SKY);
+		fprintf(f, "const float CONTENT_LADDER = %i;\n", CONTENTS_LADDER);
+
+		fprintf(f, "__used var float physics_mode = 2;\n");
+
+		fprintf(f, "const float TE_SPIKE = %i;\n", TE_SPIKE);
+		fprintf(f, "const float TE_SUPERSPIKE = %i;\n", TE_SUPERSPIKE);
+		fprintf(f, "const float TE_GUNSHOT = %i;\n", TE_GUNSHOT);
+		fprintf(f, "const float TE_EXPLOSION = %i;\n", TE_EXPLOSION);
+		fprintf(f, "const float TE_TAREXPLOSION = %i;\n", TE_TAREXPLOSION);
+		fprintf(f, "const float TE_LIGHTNING1 = %i;\n", TE_LIGHTNING1);
+		fprintf(f, "const float TE_LIGHTNING2 = %i;\n", TE_LIGHTNING2);
+		fprintf(f, "const float TE_WIZSPIKE = %i;\n", TE_WIZSPIKE);
+		fprintf(f, "const float TE_KNIGHTSPIKE = %i;\n", TE_KNIGHTSPIKE);
+		fprintf(f, "const float TE_LIGHTNING3 = %i;\n", TE_LIGHTNING3);
+		fprintf(f, "const float TE_LAVASPLASH = %i;\n", TE_LAVASPLASH);
+		fprintf(f, "const float TE_TELEPORT = %i;\n", TE_TELEPORT);
+		fprintf(f, "const float TE_EXPLOSION2 = %i;\n", TE_EXPLOSION2);
+		fprintf(f, "const float TE_BEAM = %i;\n", TE_BEAM);
+
+
+		fprintf(f, "const float MF_ROCKET			= %#x;\n", EF_ROCKET);
+		fprintf(f, "const float MF_GRENADE			= %#x;\n", EF_GRENADE);
+		fprintf(f, "const float MF_GIB				= %#x;\n", EF_GIB);
+		fprintf(f, "const float MF_ROTATE			= %#x;\n", EF_ROTATE);
+		fprintf(f, "const float MF_TRACER			= %#x;\n", EF_TRACER);
+		fprintf(f, "const float MF_ZOMGIB			= %#x;\n", EF_ZOMGIB);
+		fprintf(f, "const float MF_TRACER2			= %#x;\n", EF_TRACER2);
+		fprintf(f, "const float MF_TRACER3			= %#x;\n", EF_TRACER3);
+
+
+		fprintf(f, "const float EF_BRIGHTFIELD = %i;\n", EF_BRIGHTFIELD);
+		fprintf(f, "const float EF_MUZZLEFLASH = %i;\n", EF_MUZZLEFLASH);
+		fprintf(f, "const float EF_BRIGHTLIGHT = %i;\n", EF_BRIGHTLIGHT);
+		fprintf(f, "const float EF_DIMLIGHT = %i;\n", EF_DIMLIGHT);
+		fprintf(f, "const float EF_FULLBRIGHT = %i;\n", EF_FULLBRIGHT);
+		fprintf(f, "const float EF_NOSHADOW = %i;\n", EF_NOSHADOW);
+		fprintf(f, "const float EF_NOMODELFLAGS = %i;\n", EF_NOMODELFLAGS);
+
+		fprintf(f, "const float FL_FLY = %i;\n", FL_FLY);
+		fprintf(f, "const float FL_SWIM = %i;\n", FL_SWIM);
+		fprintf(f, "const float FL_CLIENT = %i;\n", FL_CLIENT);
+		fprintf(f, "const float FL_INWATER = %i;\n", FL_INWATER);
+		fprintf(f, "const float FL_MONSTER = %i;\n", FL_MONSTER);
+		fprintf(f, "const float FL_GODMODE = %i;\n", FL_GODMODE);
+		fprintf(f, "const float FL_NOTARGET = %i;\n", FL_NOTARGET);
+		fprintf(f, "const float FL_ITEM = %i;\n", FL_ITEM);
+		fprintf(f, "const float FL_ONGROUND = %i;\n", FL_ONGROUND);
+		fprintf(f, "const float FL_PARTIALGROUND = %i;\n", FL_PARTIALGROUND);
+		fprintf(f, "const float FL_WATERJUMP = %i;\n", FL_WATERJUMP);
+		fprintf(f, "const float FL_JUMPRELEASED = %i;\n", FL_JUMPRELEASED);
+
+		fprintf(f, "const float ATTN_NONE = %i;\n", 0);
+		fprintf(f, "const float ATTN_NORM = %i;\n", 1);
+		fprintf(f, "const float ATTN_IDLE = %i;\n", 2);
+		fprintf(f, "const float ATTN_STATIC = %i;\n", 3);
+
+		fprintf(f, "const float CHAN_AUTO = %i;\n", 0);
+		fprintf(f, "const float CHAN_WEAPON = %i;\n", 1);
+		fprintf(f, "const float CHAN_VOICE = %i;\n", 2);
+		fprintf(f, "const float CHAN_ITEM = %i;\n", 3);
+		fprintf(f, "const float CHAN_BODY = %i;\n", 4);
+	}
+
+	if (targs & (CS|MN))
+	{
+		fprintf(f, "const float IE_KEYDOWN		= %i;\n", CSIE_KEYDOWN);
+		fprintf(f, "const float IE_KEYUP		= %i;\n", CSIE_KEYUP);
+		fprintf(f, "const float IE_MOUSEDELTA	= %i;\n", CSIE_MOUSEDELTA);
+		fprintf(f, "const float IE_MOUSEABS		= %i;\n", CSIE_MOUSEABS);
+		fprintf(f, "const float IE_JOYAXIS		= %i;\n", CSIE_JOYAXIS);
+
+		fprintf(f, "const float VF_MIN = %i;", VF_MIN);
+		fprintf(f, "const float VF_MIN_X = %i;", VF_MIN_X);
+		fprintf(f, "const float VF_MIN_Y = %i;", VF_MIN_Y);
+		fprintf(f, "const float VF_SIZE = %i;", VF_SIZE);
+		fprintf(f, "const float VF_SIZE_X = %i;", VF_SIZE_X);
+		fprintf(f, "const float VF_SIZE_Y = %i;", VF_SIZE_Y);
+		fprintf(f, "const float VF_VIEWPORT = %i;", VF_VIEWPORT);
+		fprintf(f, "const float VF_FOV = %i;", VF_FOV);
+		fprintf(f, "const float VF_FOV_X = %i;", VF_FOV_X);
+		fprintf(f, "const float VF_FOV_Y = %i;", VF_FOV_Y);
+		fprintf(f, "const float VF_ORIGIN = %i;", VF_ORIGIN);
+		fprintf(f, "const float VF_ORIGIN_X = %i;", VF_ORIGIN_X);
+		fprintf(f, "const float VF_ORIGIN_Y = %i;", VF_ORIGIN_Y);
+		fprintf(f, "const float VF_ORIGIN_Z = %i;", VF_ORIGIN_Z);
+		fprintf(f, "const float VF_ANGLES = %i;", VF_ANGLES);
+		fprintf(f, "const float VF_ANGLES_X = %i;", VF_ANGLES_X);
+		fprintf(f, "const float VF_ANGLES_Y = %i;", VF_ANGLES_Y);
+		fprintf(f, "const float VF_ANGLES_Z = %i;", VF_ANGLES_Z);
+		fprintf(f, "const float VF_DRAWWORLD = %i;", VF_DRAWWORLD);
+		fprintf(f, "const float VF_DRAWENGINESBAR = %i;", VF_DRAWENGINESBAR);
+		fprintf(f, "const float VF_DRAWCROSSHAIR = %i;", VF_DRAWCROSSHAIR);
+		fprintf(f, "const float VF_CL_VIEWANGLES = %i;", VF_CL_VIEWANGLES);
+		fprintf(f, "const float VF_CL_VIEWANGLES_X = %i;", VF_CL_VIEWANGLES_X);
+		fprintf(f, "const float VF_CL_VIEWANGLES_Y = %i;", VF_CL_VIEWANGLES_Y);
+		fprintf(f, "const float VF_CL_VIEWANGLES_Z = %i;", VF_CL_VIEWANGLES_Z);
+		fprintf(f, "const float VF_ACTIVESEAT = %i; //stub", VF_ACTIVESEAT);
+		fprintf(f, "const float VF_AFOV = %i;", VF_AFOV);
+		fprintf(f, "const float VF_SCREENVSIZE = %i;", VF_SCREENVSIZE);
+		fprintf(f, "const float VF_SCREENPSIZE = %i;", VF_SCREENPSIZE);
+
+		fprintf(f, "const float RF_VIEWMODEL = %i;", RF_VIEWMODEL);
+		fprintf(f, "const float RF_EXTERNALMODEL = %i;", RF_EXTERNALMODEL);
+		fprintf(f, "const float RF_DEPTHHACK = %i;", RF_DEPTHHACK);
+		fprintf(f, "const float RF_ADDITIVE = %i;", RF_ADDITIVE);
+		fprintf(f, "const float RF_USEAXIS = %i;", RF_USEAXIS);
+		fprintf(f, "const float RF_NOSHADOW = %i;", RF_NOSHADOW);
+		fprintf(f, "const float RF_WEIRDFRAMETIMES = %i;", RF_WEIRDFRAMETIMES);
+
+		fprintf(f, "const float SLIST_HOSTCACHEVIEWCOUNT = %i;", SLIST_HOSTCACHEVIEWCOUNT);
+		fprintf(f, "const float SLIST_HOSTCACHETOTALCOUNT = %i;", SLIST_HOSTCACHETOTALCOUNT);
+		fprintf(f, "const float SLIST_SORTFIELD = %i;", SLIST_SORTFIELD);
+		fprintf(f, "const float SLIST_SORTDESCENDING = %i;", SLIST_SORTDESCENDING);
+
+		fprintf(f, "const float GGDI_GAMEDIR = %i;", GGDI_GAMEDIR);
+		//fprintf(f, "const float GGDI_DESCRIPTION = %i;", GGDI_DESCRIPTION);
+		//fprintf(f, "const float GGDI_OVERRIDES = %i;", GGDI_OVERRIDES);
+		fprintf(f, "const float GGDI_LOADCOMMAND = %i;", GGDI_LOADCOMMAND);
+		//fprintf(f, "const float GGDI_ICON = %i;", GGDI_ICON);
+		//fprintf(f, "const float GGDI_GAMEDIRLIST = %i;", GGDI_GAMEDIRLIST);
 	}
 	fprintf(f, "const float STAT_USER = 32;			/* Custom user stats start here (lower values are reserved for engine use). */\n");
 	//these can be used for both custom stats and for reflection
@@ -7082,30 +8092,20 @@ void PR_DumpPlatform_f(void)
 	fprintf(f, "const float EV_POINTER = %i;\n", ev_pointer);
 	fprintf(f, "const float EV_INTEGER = %i;\n", ev_ext_integer);
 
-	if (targs & 1)
+#define QCEXTFIELD(n,t) fprintf(f, "%s %s;\n", t, #n);
+	//extra fields
+	fprintf(f, "\n\n//Supported Extension fields\n");
+	QCEXTFIELDS_ALL
+	if (targs & (SS|CS)) {QCEXTFIELDS_GAME}
+	if (targs & (CS|MN)) {QCEXTFIELDS_CL}
+	if (targs & (CS)) {QCEXTFIELDS_CS}
+	if (targs & (SS)) {QCEXTFIELDS_SS}
+#undef QCEXTFIELD
+
+	if (targs & SS)
 	{
-		//extra fields
-		fprintf(f, "\n\n//Supported Extension fields\n");
-		fprintf(f, ".float gravity;\n");	//used by hipnotic
-		fprintf(f, "//.float items2;			/*if defined, overrides serverflags for displaying runes on the hud*/\n");	//used by both mission packs. *REPLACES* serverflags if defined, so lets try not to define it.
-		fprintf(f, ".float traileffectnum;		/*can also be set with 'traileffect' from a map editor*/\n");
-		fprintf(f, ".float emiteffectnum;		/*can also be set with 'traileffect' from a map editor*/\n");
-		fprintf(f, ".vector movement;			/*describes which forward/right/up keys the player is holidng*/\n");
-		fprintf(f, ".entity viewmodelforclient;	/*attaches this entity to the specified player's view. invisible to other players*/\n");
-		fprintf(f, ".entity exteriormodeltoclient;/*hides the entity in the specified player's main view. it will remain visible in mirrors etc.*/\n");
-		fprintf(f, ".float scale;				/*rescales the etntiy*/\n");
-		fprintf(f, ".float alpha;				/*entity opacity*/\n");		//entity alpha. woot.
-		fprintf(f, ".vector colormod;			/*tints the entity's colours*/\n");
-		fprintf(f, ".entity tag_entity;\n");
-		fprintf(f, ".float tag_index;\n");
-		fprintf(f, ".float button3;\n");
-		fprintf(f, ".float button4;\n");
-		fprintf(f, ".float button5;\n");
-		fprintf(f, ".float button6;\n");
-		fprintf(f, ".float button7;\n");
-		fprintf(f, ".float button8;\n");
-		fprintf(f, ".float viewzoom;			/*rescales the user's fov*/\n");
-		fprintf(f, ".float modelflags;			/*provides additional modelflags to use (effects&EF_NOMODELFLAGS to replace the original model's)*/\n");
+		fprintf(f, ".float style;\n");		//not used by the engine, but is used by tools etc.
+		fprintf(f, ".float light_lev;\n");	//ditto.
 
 		//extra constants
 		fprintf(f, "\n\n//Supported Extension Constants\n");
@@ -7120,14 +8120,16 @@ void PR_DumpPlatform_f(void)
 		fprintf(f, "const float EF_NOSHADOW			= %#x;\n", EF_NOSHADOW);
 		fprintf(f, "const float EF_NOMODELFLAGS		= %#x; /*the standard modelflags from the model are ignored*/\n", EF_NOMODELFLAGS);
 
-		fprintf(f, "const float MF_ROCKET			= %#x;\n", EF_ROCKET);
-		fprintf(f, "const float MF_GRENADE			= %#x;\n", EF_GRENADE);
-		fprintf(f, "const float MF_GIB				= %#x;\n", EF_GIB);
-		fprintf(f, "const float MF_ROTATE			= %#x;\n", EF_ROTATE);
-		fprintf(f, "const float MF_TRACER			= %#x;\n", EF_TRACER);
-		fprintf(f, "const float MF_ZOMGIB			= %#x;\n", EF_ZOMGIB);
-		fprintf(f, "const float MF_TRACER2			= %#x;\n", EF_TRACER2);
-		fprintf(f, "const float MF_TRACER3			= %#x;\n", EF_TRACER3);
+		fprintf(f, "const float DAMAGE_AIM = %i;\n", DAMAGE_AIM);
+		fprintf(f, "const float DAMAGE_NO = %i;\n", DAMAGE_NO);
+		fprintf(f, "const float DAMAGE_YES = %i;\n", DAMAGE_YES);
+
+		fprintf(f, "const float MSG_BROADCAST = %i;\n", MSG_BROADCAST);
+		fprintf(f, "const float MSG_ONE = %i;\n", MSG_ONE);
+		fprintf(f, "const float MSG_ALL = %i;\n", MSG_ALL);
+		fprintf(f, "const float MSG_INIT = %i;\n", MSG_INIT);
+		fprintf(f, "const float MSG_MULTICAST = %i;\n", MSG_EXT_MULTICAST);
+		fprintf(f, "const float MSG_ENTITY = %i;\n", MSG_EXT_ENTITY);
 
 		fprintf(f, "const float MSG_MULTICAST	= %i;\n", 4);
 		fprintf(f, "const float MULTICAST_ALL	= %i;\n", MULTICAST_ALL_U);
@@ -7145,32 +8147,109 @@ void PR_DumpPlatform_f(void)
 	fprintf(f, "const float FILE_APPEND		= "STRINGIFY(1)";\n");
 	fprintf(f, "const float FILE_WRITE		= "STRINGIFY(2)";\n");
 
-	if (targs & 2)
+	//this is annoying. builtins from pr_cmds.c are not known here.
+	if (targs & (CS|SS))
 	{
+		const char *conflictprefix = "";//(targs&CS)?"":"//";
 		fprintf(f, "\n\n//Vanilla Builtin list (reduced, so as to avoid conflicts)\n");
 		fprintf(f, "void(vector) makevectors = #1;\n");
 		fprintf(f, "void(entity,vector) setorigin = #2;\n");
 		fprintf(f, "void(entity,string) setmodel = #3;\n");
 		fprintf(f, "void(entity,vector,vector) setsize = #4;\n");
 		fprintf(f, "float() random = #7;\n");
-		//sound = #8
+		fprintf(f, "%svoid(entity e, float chan, string samp, float vol, float atten, optional float speedpct, optional float flags, optional float timeofs) sound = #8;\n", conflictprefix);
 		fprintf(f, "vector(vector) normalize = #9;\n");
 		fprintf(f, "void(string e) error = #10;\n");
 		fprintf(f, "void(string n) objerror = #11;\n");
 		fprintf(f, "float(vector) vlen = #12;\n");
+		fprintf(f, "float(vector fwd) vectoyaw = #13;\n");
 		fprintf(f, "entity() spawn = #14;\n");
 		fprintf(f, "void(entity e) remove = #15;\n");
+		fprintf(f, "void(vector v1, vector v2, float flags, entity ent) traceline = #16;\n");
+		if (targs&SS)
+			fprintf(f, "entity() checkclient = #17;\n");
+		fprintf(f, "entity(entity start, .string fld, string match) find = #18;\n");
+		fprintf(f, "string(string s) precache_sound = #19;\n");
+		fprintf(f, "string(string s) precache_model = #20;\n");
+		if (targs&SS)
+			fprintf(f, "%svoid(entity client, string s) stuffcmd = #21;\n", conflictprefix);
+		fprintf(f, "%sentity(vector org, float rad, optional .entity chainfield) findradius = #22;\n", conflictprefix);
+		if (targs&SS)
+		{
+			fprintf(f, "%svoid(string s, optional string s2, optional string s3, optional string s4, optional string s5, optional string s6, optional string s7, optional string s8) bprint = #23;\n", conflictprefix);
+			fprintf(f, "%svoid(entity pl, string s, optional string s2, optional string s3, optional string s4, optional string s5, optional string s6, optional string s7) sprint = #24;\n", conflictprefix);
+		}
 		fprintf(f, "void(string,...) dprint = #25;\n");
 		fprintf(f, "string(float) ftos = #26;\n");
 		fprintf(f, "string(vector) vtos = #27;\n");
+		fprintf(f, "%sfloat(float yaw, float dist, optional float settraceglobals) walkmove = #32;\n", conflictprefix);
+		fprintf(f, "float() droptofloor = #34;\n");
+		fprintf(f, "%svoid(float lightstyle, string stylestring, optional vector rgb) lightstyle = #35;\n", conflictprefix);
 		fprintf(f, "float(float n) rint = #36;\n");
 		fprintf(f, "float(float n) floor = #37;\n");
 		fprintf(f, "float(float n) ceil = #38;\n");
+		fprintf(f, "float(entity e) checkbottom = #40;\n");
+		fprintf(f, "float(vector point) pointcontents = #41;\n");
 		fprintf(f, "float(float n) fabs = #43;\n");
+		if (targs&SS)
+			fprintf(f, "vector(entity e, float speed) aim = #44;\n");
 		fprintf(f, "float(string) cvar = #45;\n");
 		fprintf(f, "void(string,...) localcmd = #46;\n");
 		fprintf(f, "entity(entity) nextent = #47;\n");
+		fprintf(f, "void(vector o, vector d, float color, float count) particle = #48;\n");
+		fprintf(f, "void() changeyaw = #49;\n");
+		fprintf(f, "%svector(vector fwd, optional vector up) vectoangles = #51;\n", conflictprefix);
+		if (targs&SS)
+		{
+			fprintf(f, "void(float to, float val) WriteByte = #52;\n");
+			fprintf(f, "void(float to, float val) WriteChar = #53;\n");
+			fprintf(f, "void(float to, float val) WriteShort = #54;\n");
+			fprintf(f, "void(float to, float val) WriteLong = #55;\n");
+			fprintf(f, "void(float to, float val) WriteCoord = #56;\n");
+			fprintf(f, "void(float to, float val) WriteAngle = #57;\n");
+			fprintf(f, "void(float to, string val) WriteString = #58;\n");
+			fprintf(f, "void(float to, entity val) WriteEntity = #59;\n");
+		}
+		fprintf(f, "void(float step) movetogoal = #67;\n");
+		fprintf(f, "string(string s) precache_file = #68;\n");
+		fprintf(f, "void(entity e) makestatic = #69;\n");
+		if (targs&SS)
+			fprintf(f, "void(string mapname, optional string newmapstartspot) changelevel = #70;\n");
 		fprintf(f, "void(string var, string val) cvar_set = #72;\n");
+		if (targs&SS)
+			fprintf(f, "void(entity ent, string text, optional string text2, optional string text3, optional string text4, optional string text5, optional string text6, optional string text7) centerprint = #73;\n");
+		fprintf(f, "void (vector pos, string samp, float vol, float atten) ambientsound = #74;\n");
+		fprintf(f, "string(string str) precache_model2 = #75;\n");
+		fprintf(f, "string(string str) precache_sound2 = #76;\n");
+		fprintf(f, "string(string str) precache_file2 = #77;\n");
+		if (targs&SS)
+			fprintf(f, "void(entity player) setspawnparms = #78;\n");
+	}
+	if (targs & MN)
+	{
+		fprintf(f, "void(string e) error = #2;\n");
+		fprintf(f, "void(string n) objerror = #3;\n");
+		fprintf(f, "float(vector) vlen = #9;\n");
+		fprintf(f, "float(vector fwd) vectoyaw = #10;\n");
+		fprintf(f, "vector(vector fwd, optional vector up) vectoangles = #11;\n");
+		fprintf(f, "float() random = #12;\n");
+		fprintf(f, "void(string,...) localcmd = #13;\n");
+		fprintf(f, "float(string) cvar = #14;\n");
+		fprintf(f, "void(string var, string val) cvar_set = #15;\n");
+		fprintf(f, "void(string,...) dprint = #16;\n");
+		fprintf(f, "string(float) ftos = #17;\n");
+		fprintf(f, "float(float n) fabs = #18;\n");
+		fprintf(f, "string(vector) vtos = #19;\n");
+		fprintf(f, "entity() spawn = #22;\n");
+		fprintf(f, "void(entity e) remove = #23;\n");
+		fprintf(f, "entity(entity start, .string fld, string match) find = #24;\n");
+		fprintf(f, "string(string s) precache_file = #28;\n");
+		fprintf(f, "string(string s) precache_sound = #29;\n");
+		fprintf(f, "float(float n) rint = #34;\n");
+		fprintf(f, "float(float n) floor = #35;\n");
+		fprintf(f, "float(float n) ceil = #36;\n");
+		fprintf(f, "entity(entity) nextent = #37;\n");
+		fprintf(f, "float() clientstate = #62;\n");
 	}
 
 	for (j = 0; j < 2; j++)
@@ -7181,9 +8260,11 @@ void PR_DumpPlatform_f(void)
 			fprintf(f, "\n\n//Builtin list\n");
 		for (i = 0; i < sizeof(extensionbuiltins)/sizeof(extensionbuiltins[0]); i++)
 		{
-			if ((targs & 2) && extensionbuiltins[i].csqcfunc)
+			if ((targs & CS) && extensionbuiltins[i].csqcfunc)
 				;
-			else if ((targs & 1) && extensionbuiltins[i].ssqcfunc)
+			else if ((targs & SS) && extensionbuiltins[i].ssqcfunc)
+				;
+			else if ((targs & MN) && extensionbuiltins[i].menufunc)
 				;
 			else
 				continue;

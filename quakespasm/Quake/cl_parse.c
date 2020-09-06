@@ -196,7 +196,6 @@ entity_t	*CL_EntityNum (int num)
 		while (cl.num_entities<=num)
 		{
 			cl.entities[cl.num_entities].baseline = nullentitystate;
-			cl.entities[cl.num_entities].colormap = vid.colormap;
 			cl.entities[cl.num_entities].lerpflags |= LERP_RESETMOVE|LERP_RESETANIM; //johnfitz
 			cl.num_entities++;
 		}
@@ -205,6 +204,19 @@ entity_t	*CL_EntityNum (int num)
 	return &cl.entities[num];
 }
 
+static int MSG_ReadSize16 (sizebuf_t *sb)
+{
+	unsigned short ssolid = MSG_ReadShort();
+	if (ssolid == ES_SOLID_BSP)
+		return ssolid;
+	else
+	{
+		int solid = (((ssolid>>7) & 0x1F8) - 32+32768)<<16;	/*up can be negative*/
+		solid|= ((ssolid & 0x1F)<<3);
+		solid|= ((ssolid & 0x3E0)<<10);
+		return solid;
+	}
+}
 static unsigned int CLFTE_ReadDelta(unsigned int entnum, entity_state_t *news, const entity_state_t *olds, const entity_state_t *baseline)
 {
 	unsigned int predbits = 0;
@@ -387,23 +399,22 @@ static unsigned int CLFTE_ReadDelta(unsigned int entnum, entity_state_t *news, c
 		{
 			byte enc = MSG_ReadByte();
 			if (enc == 0)
-				/*solidsize = ES_SOLID_NOT*/;
+				news->solidsize = ES_SOLID_NOT;
 			else if (enc == 1)
-				/*solidsize = ES_SOLID_BSP*/;
+				news->solidsize = ES_SOLID_BSP;
 			else if (enc == 2)
-				/*solidsize = ES_SOLID_HULL1*/;
+				news->solidsize = ES_SOLID_HULL1;
 			else if (enc == 3)
-				/*solidsize = ES_SOLID_HULL2*/;
+				news->solidsize = ES_SOLID_HULL2;
 			else if (enc == 16)
-				/*solidsize = */MSG_ReadShort();//MSG_ReadSize16(&net_message);
+				news->solidsize = MSG_ReadSize16(&net_message);
 			else if (enc == 32)
-				/*solidsize = */MSG_ReadLong();
+				news->solidsize = MSG_ReadLong();
 			else
 				Sys_Error("Solid+Size encoding not known");
 		}
 		else
-			/*solidsize =*/ MSG_ReadShort();//MSG_ReadSize16(&net_message);
-//		news->solidsize = solidsize;
+			news->solidsize = MSG_ReadSize16(&net_message);
 	}
 
 	if (bits & UF_FLAGS)
@@ -531,7 +542,7 @@ static void CLFTE_ParseBaseline(entity_state_t *es)
 //called with both fte+dp deltas
 static void CL_EntitiesDeltaed(void)
 {
-	int			i, newnum;
+	int			newnum;
 	qmodel_t	*model;
 	qboolean	forcelink;
 	entity_t	*ent;
@@ -554,15 +565,6 @@ static void CL_EntitiesDeltaed(void)
 
 		ent->msgtime = cl.mtime[0];
 
-		i = ent->netstate.colormap;
-		if (!i)
-			ent->colormap = vid.colormap;
-		else
-		{
-			if (i > cl.maxclients)
-				Sys_Error ("i >= cl.maxclients");
-			ent->colormap = cl.scores[i-1].translations;
-		}
 		skin = ent->netstate.skin;
 		if (skin != ent->skinnum)
 		{
@@ -650,7 +652,15 @@ static void CLFTE_ParseEntitiesUpdate(void)
 		cl.ackframes[cl.ackframes_count++] = NET_QSocketGetSequenceIn(cls.netcon);
 
 	if (cl.protocol_pext2 & PEXT2_PREDINFO)
-		MSG_ReadShort();	//an ack from our input sequences. strictly ascending-or-equal
+	{
+		int seq = (cl.movemessages&0xffff0000) | (unsigned short)MSG_ReadShort();	//an ack from our input sequences. strictly ascending-or-equal
+		if (seq > cl.movemessages)
+			seq -= 0x10000;	//check for cl.movemessages overflowing the low 16 bits, and compensate.
+		cl.ackedmovemessages = seq;
+
+		if (cl.qcvm.extglobals.servercommandframe)
+			*cl.qcvm.extglobals.servercommandframe = cl.ackedmovemessages;
+	}
 
 	newtime = MSG_ReadFloat ();
 	if (newtime != cl.mtime[0])
@@ -734,16 +744,75 @@ static void CLFTE_ParseEntitiesUpdate(void)
 	}
 }
 
+static void CSQC_ClearCsEdictForSSQC(size_t entnum)
+{
+	edict_t *ed;
+	if (entnum >= cl.ssqc_to_csqc_max)
+		return;	//invalid...
+
+	ed = cl.ssqc_to_csqc[entnum];
+	if (ed)
+	{
+		cl.ssqc_to_csqc[entnum] = NULL;
+
+		//let the csqc know.
+		pr_global_struct->self = EDICT_TO_PROG(ed);
+		if (qcvm->extfuncs.CSQC_Ent_Remove)
+			PR_ExecuteProgram(qcvm->extfuncs.CSQC_Ent_Remove);
+		else
+			ED_Free(ed);
+	}
+}
+static void CSQC_UpdateCsEdictForSSQC(size_t entnum)
+{
+	edict_t *ed;
+	eval_t *ev;
+	qboolean isnew;
+	if (entnum >= cl.ssqc_to_csqc_max)
+	{
+		size_t nc = q_min(MAX_EDICTS, entnum+64);
+		void *nptr;
+		if (entnum >= nc)
+			Host_EndGame("entnum > MAX_EDICTS");
+		nptr = realloc(cl.ssqc_to_csqc, nc * sizeof(*cl.ssqc_to_csqc));
+		if (!nptr)
+			Sys_Error("realloc failure");
+		cl.ssqc_to_csqc = nptr;
+		memset(cl.ssqc_to_csqc+cl.ssqc_to_csqc_max, 0, (nc-cl.ssqc_to_csqc_max)*sizeof(*cl.ssqc_to_csqc));
+		cl.ssqc_to_csqc_max = nc;
+	}
+
+	ed = cl.ssqc_to_csqc[entnum];
+	if (!ed)
+	{
+		//allocate our new ent.
+		ed = cl.ssqc_to_csqc[entnum] = ED_Alloc();
+
+		//fill its entnum field too.
+		ev = GetEdictFieldValue(ed, qcvm->extfields.entnum);
+		if (ev)
+			ev->_float = entnum;
+		isnew = true;
+	}
+	else
+		isnew = false;
+
+	G_FLOAT(OFS_PARM0) = isnew;
+	pr_global_struct->self = EDICT_TO_PROG(ed);
+	PR_ExecuteProgram(cl.qcvm.extfuncs.CSQC_Ent_Update);
+}
+
 //csqc entities protocol, payload is identical in both fte+dp. just the svcs differ.
 void CLFTE_ParseCSQCEntitiesUpdate(void)
 {
-	/*if (cl.qcvm.extfuncs.CSQC_Ent_Update)
+	if (qcvm->extfuncs.CSQC_Ent_Update)
 	{
-		edict_t *ed;
+		unsigned int entnum;
+		qboolean removeflag;
 		for(;;)
 		{
 			//replacement deltas now also includes 22bit entity num indicies.
-			if (cls.fteprotocolextensions2 & PEXT2_REPLACEMENTDELTAS)
+			if (cl.protocol_pext2 & PEXT2_REPLACEMENTDELTAS)
 			{
 				entnum = (unsigned short)MSG_ReadShort();
 				removeflag = !!(entnum & 0x8000);
@@ -763,36 +832,31 @@ void CLFTE_ParseCSQCEntitiesUpdate(void)
 
 			if (removeflag)
 			{
-				ed = cl.ssqc_to_csqc[entnum];
-				if (ed)
-				{
-					pr_global_struct->self = EDICT_TO_PROG(ed);
-					if (cl.qcvm.extfuncs.CSQC_Ent_Remove)
-						PR_ExecuteProgram(cl.qcvm.extfuncs.CSQC_Ent_Remove);
-					else
-						ED_Free(ed);
-				}
+				if (cl_shownet.value >= 3)
+					Con_SafePrintf("%3i:     Remove %i\n", msg_readcount, entnum);
+				CSQC_ClearCsEdictForSSQC(entnum);
 			}
 			else
 			{
-//				if (cl.csqcdebug)
-//					packetsize = MSG_ReadShort();
-
-				ed = cl.ssqc_to_csqc[entnum];
-				if (!ed)
+/*				if (sized)
 				{
-					cl.ssqc_to_csqc[entnum] = ed = ED_Alloc();
-					ed->v.entnum = entnum;
-					G_FLOAT(OFS_PARM0) = true;
+					packetsize = MSG_ReadShort();
+					if (cl_shownet.value >= 3)
+						Con_SafePrintf("%3i - %3i:     Update %i\n", msg_readcount, msg_readcount+packetsize-1, entnum);
 				}
 				else
-					G_FLOAT(OFS_PARM0) = false;
-				pr_global_struct->self = EDICT_TO_PROG(ed);
-				PR_ExecuteProgram(cl.qcvm.extfuncs.CSQC_Ent_Update);
+*/				{
+					if (cl_shownet.value >= 3)
+						Con_SafePrintf("%3i:     Update %i\n", msg_readcount, entnum);
+				}
+
+				CSQC_UpdateCsEdictForSSQC(entnum);
+//				if (sized)
+//					;//TODO make sure we read the right size...
 			}
 		}
 	}
-	else*/
+	else
 		Host_Error ("Received svc_csqcentities but unable to parse");
 }
 
@@ -1009,7 +1073,9 @@ static void CLDP_ParseEntitiesUpdate(void)
 	ack = MSG_ReadLong();	//delta sequence number (must be acked)
 	if (cl.ackframes_count < sizeof(cl.ackframes)/sizeof(cl.ackframes[0]))
 		cl.ackframes[cl.ackframes_count++] = ack;
-	MSG_ReadLong();	//input sequence ack
+	cl.ackedmovemessages = MSG_ReadLong();	//input sequence ack
+	if (cl.qcvm.extglobals.servercommandframe)
+		*cl.qcvm.extglobals.servercommandframe = cl.ackedmovemessages;
 
 	for(;;)
 	{
@@ -1232,9 +1298,9 @@ static void CL_ParseServerInfo (void)
 		i = MSG_ReadLong ();
 		if (i == PROTOCOL_FTE_PEXT1)
 		{
-			i = MSG_ReadLong();
-			if (i & ~PEXT1_ACCEPTED_CLIENT)
-				Host_Error ("Server returned FTE1 protocol extensions that are not supported (%#x)", i);
+			cl.protocol_pext1 = MSG_ReadLong();
+			if (cl.protocol_pext1& ~PEXT1_ACCEPTED_CLIENT)
+				Host_Error ("Server returned FTE1 protocol extensions that are not supported (%#x)", cl.protocol_pext1 & ~PEXT1_SUPPORTED_CLIENT);
 			continue;
 		}
 		if (i == PROTOCOL_FTE_PEXT2)
@@ -1506,17 +1572,7 @@ static void CL_ParseUpdate (int bits)
 		ent->frame = ent->baseline.frame;
 
 	if (bits & U_COLORMAP)
-		i = MSG_ReadByte();
-	else
-		i = ent->baseline.colormap;
-	if (!i)
-		ent->colormap = vid.colormap;
-	else
-	{
-		if (i > cl.maxclients)
-			Sys_Error ("i >= cl.maxclients");
-		ent->colormap = cl.scores[i-1].translations;
-	}
+		ent->netstate.colormap = MSG_ReadByte();
 	if (bits & U_SKIN)
 		skin = MSG_ReadByte();
 	else
@@ -1886,37 +1942,9 @@ CL_NewTranslation
 */
 static void CL_NewTranslation (int slot)
 {
-	int		i, j;
-	int		top, bottom;
-	byte	*dest, *source;
-
 	if (slot > cl.maxclients)
 		Sys_Error ("CL_NewTranslation: slot > cl.maxclients");
-	dest = cl.scores[slot].translations;
-	source = vid.colormap;
-	memcpy (dest, vid.colormap, sizeof(cl.scores[slot].translations));
-	top = cl.scores[slot].colors & 0xf0;
-	bottom = (cl.scores[slot].colors &15)<<4;
 	R_TranslatePlayerSkin (slot);
-
-	for (i = 0; i < VID_GRADES; i++, dest += 256, source+=256)
-	{
-		if (top < 128)	// the artists made some backwards ranges.  sigh.
-			memcpy (dest + TOP_RANGE, source + top, 16);
-		else
-		{
-			for (j = 0; j < 16; j++)
-				dest[TOP_RANGE+j] = source[top+15-j];
-		}
-
-		if (bottom < 128)
-			memcpy (dest + BOTTOM_RANGE, source + bottom, 16);
-		else
-		{
-			for (j = 0; j < 16; j++)
-				dest[BOTTOM_RANGE+j] = source[bottom+15-j];
-		}
-	}
 }
 
 /*
@@ -1957,7 +1985,6 @@ static void CL_ParseStatic (int version) //johnfitz -- added a parameter
 	ent->lerpflags |= LERP_RESETANIM; //johnfitz -- lerping
 	ent->frame = ent->baseline.frame;
 
-	ent->colormap = vid.colormap;
 	ent->skinnum = ent->baseline.skin;
 	ent->effects = ent->baseline.effects;
 	ent->alpha = ent->baseline.alpha; //johnfitz -- alpha
@@ -2177,30 +2204,46 @@ static void CL_ParseStuffText(const char *msg)
 {
 	const char *str;
 	q_strlcat(cl.stuffcmdbuf, msg, sizeof(cl.stuffcmdbuf));
-	while ((str = strchr(cl.stuffcmdbuf, '\n')))
+	for (; (str = strchr(cl.stuffcmdbuf, '\n')); memmove(cl.stuffcmdbuf, str, Q_strlen(str)+1))
 	{
-		qboolean handled;
+		qboolean handled = false;
+
+		str++;//skip past the \n
+
 		if (*cl.stuffcmdbuf == 0x01 && cl.protocol == PROTOCOL_NETQUAKE) //proquake message, just strip this and try again (doesn't necessarily have a trailing \n straight away)
 		{
 			for (str = cl.stuffcmdbuf+1; *str >= 0x01 && *str <= 0x1f; str++)
 				;//FIXME: parse properly
-			memmove(cl.stuffcmdbuf, str, Q_strlen(str)+1);
 			continue;
 		}
-		str++;//skip past the \n
 
-		//handle //prefixed commands
+		//handle special commands
 		if (cl.stuffcmdbuf[0] == '/' && cl.stuffcmdbuf[1] == '/')
 		{
 			handled = Cmd_ExecuteString(cl.stuffcmdbuf+2, src_server);
 			if (!handled)
-				Con_DPrintf("Server sent unknown command %s\n", Cmd_Argv(1));
+				Con_DPrintf("Server sent unknown command %s\n", Cmd_Argv(0));
 		}
 		else
 			handled = Cmd_ExecuteString(cl.stuffcmdbuf, src_server);
+
+		//give the csqc a chance to handle them
+		if (!handled && cl.qcvm.extfuncs.CSQC_Parse_StuffCmd && str-cl.stuffcmdbuf<STRINGTEMP_LENGTH)
+		{
+			char *tmp;
+			PR_SwitchQCVM(&cl.qcvm);
+			tmp = PR_GetTempString();
+			memcpy(tmp, cl.stuffcmdbuf, str-cl.stuffcmdbuf);
+			tmp[str-cl.stuffcmdbuf] = 0;	//null terminate it.
+			G_INT(OFS_PARM0) = PR_SetEngineString(tmp);
+			PR_ExecuteProgram(cl.qcvm.extfuncs.CSQC_Parse_StuffCmd);
+			handled = true;	//unfortunately the mod is expected to localcmd unknown things.
+			PR_SwitchQCVM(NULL);
+		}
+
+		//let the server exec general user commands (massive security hole)
 		if (!handled)
 			Cbuf_AddTextLen(cl.stuffcmdbuf, str-cl.stuffcmdbuf);
-		memmove(cl.stuffcmdbuf, str, Q_strlen(str)+1);
 	}
 }
 
@@ -2276,6 +2319,66 @@ static qboolean CL_ParseSpecialPrints(const char *printtext)
 	}
 
 	return false;
+}
+
+static void CL_ParsePrint(const char *msg)
+{
+	const char *str;
+	char *tmp;
+	if (CL_ParseSpecialPrints(msg))
+		return;
+
+	if (cl.qcvm.extfuncs.CSQC_Parse_Print)
+	{
+		q_strlcat(cl.printbuffer, msg, sizeof(cl.printbuffer));
+		for (; *cl.printbuffer; memmove(cl.printbuffer, str, Q_strlen(str)+1))
+		{
+			for (str = cl.printbuffer; str < cl.printbuffer+STRINGTEMP_LENGTH-1; str++)
+			{
+				if (*str == '\r' || *str == '\n')
+				{
+					str++;
+					break;
+				}
+				if (!*str)
+					return;
+			}
+			PR_SwitchQCVM(&cl.qcvm);
+			tmp = PR_GetTempString();
+			memcpy(tmp, cl.printbuffer, str-cl.printbuffer);
+			tmp[str-cl.printbuffer] = 0;
+			G_INT(OFS_PARM0) = PR_SetEngineString(tmp);
+			G_FLOAT(OFS_PARM1) = ((*tmp=='\1')?3:2);	//guess at the print level. we don't really have them in NQ.
+			PR_ExecuteProgram(qcvm->extfuncs.CSQC_Parse_Print);
+			PR_SwitchQCVM(NULL);
+		}
+	}
+	else
+	{
+		if (*cl.printbuffer)
+		{
+			Con_Printf ("%s", cl.printbuffer);
+			*cl.printbuffer = 0;
+		}
+		Con_Printf ("%s", msg);
+	}
+}
+
+static void CL_ParseCenterPrint(const char *msg)
+{
+	char *tmp;
+	if (cl.qcvm.extfuncs.CSQC_Parse_CenterPrint)
+	{	//let the csqc do it.
+		PR_SwitchQCVM(&cl.qcvm);
+		tmp = PR_GetTempString();
+		q_strlcpy(tmp, msg, STRINGTEMP_LENGTH);
+		G_INT(OFS_PARM0) = PR_SetEngineString(tmp);
+		PR_ExecuteProgram(qcvm->extfuncs.CSQC_Parse_CenterPrint);
+		//qc calls cprint if it wants the legacy behaviour...
+		PR_SwitchQCVM(NULL);
+	}
+	else
+		SCR_CenterPrint(msg);
 }
 
 /*
@@ -2377,15 +2480,12 @@ void CL_ParseServerMessage (void)
 			Host_EndGame ("Server disconnected\n");
 
 		case svc_print:
-			str = MSG_ReadString();
-			if (!CL_ParseSpecialPrints(str))
-				Con_Printf ("%s", str);
+			CL_ParsePrint(MSG_ReadString());
 			break;
 
 		case svc_centerprint:
 			//johnfitz -- log centerprints to console
-			str = MSG_ReadString ();
-			SCR_CenterPrint (str);
+			CL_ParseCenterPrint (MSG_ReadString());
 			//johnfitz
 			break;
 
@@ -2542,8 +2642,7 @@ void CL_ParseServerMessage (void)
 			cl.completed_time = cl.time;
 			vid.recalc_refdef = true;	// go to full screen
 			//johnfitz -- log centerprints to console
-			str = MSG_ReadString ();
-			SCR_CenterPrint (str);
+			CL_ParseCenterPrint (MSG_ReadString());
 			//johnfitz
 			break;
 
@@ -2552,8 +2651,7 @@ void CL_ParseServerMessage (void)
 			cl.completed_time = cl.time;
 			vid.recalc_refdef = true;	// go to full screen
 			//johnfitz -- log centerprints to console
-			str = MSG_ReadString ();
-			SCR_CenterPrint (str);
+			CL_ParseCenterPrint (MSG_ReadString ());
 			//johnfitz
 			break;
 
@@ -2623,7 +2721,9 @@ void CL_ParseServerMessage (void)
 		case svcdp_csqcentities:	//FTE uses DP's svc number for nq, because compat (despite fte's svc being first). same payload either way.
 			if (!(cl.protocol_pext2 & PEXT2_REPLACEMENTDELTAS) && cl.protocol != PROTOCOL_VERSION_DP7)
 				Host_Error ("Received svcdp_csqcentities but extension not active");
+			PR_SwitchQCVM(&cl.qcvm);
 			CLFTE_ParseCSQCEntitiesUpdate();
+			PR_SwitchQCVM(NULL);
 			break;
 		case svcdp_spawnbaseline2:	//limited to a handful of extra properties.
 			if (cl.protocol != PROTOCOL_VERSION_DP7)
@@ -2695,6 +2795,8 @@ void CL_ParseServerMessage (void)
 			break;
 
 		case svcfte_cgamepacket:
+			if (!(cl.protocol_pext1 & PEXT1_CSQC))
+				Host_Error ("Received svcfte_cgamepacket but extension not active");
 			if (cl.qcvm.extfuncs.CSQC_Parse_Event)
 			{
 				PR_SwitchQCVM(&cl.qcvm);

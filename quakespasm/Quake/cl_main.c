@@ -34,8 +34,9 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // references them even when on a unix system.
 
 // these two are not intended to be set directly
-cvar_t	cl_name = {"_cl_name", "player", CVAR_ARCHIVE};
-cvar_t	cl_color = {"_cl_color", "0", CVAR_ARCHIVE};
+cvar_t	cl_name = {"name", "player", CVAR_ARCHIVE | CVAR_USERINFO};
+cvar_t	cl_topcolor = {"topcolor", "", CVAR_ARCHIVE | CVAR_USERINFO};
+cvar_t	cl_bottomcolor = {"bottomcolor", "", CVAR_ARCHIVE | CVAR_USERINFO};
 
 cvar_t	cl_shownet = {"cl_shownet","0",CVAR_NONE};	// can be 0, 1, or 2
 cvar_t	cl_nolerp = {"cl_nolerp","0",CVAR_NONE};
@@ -96,6 +97,7 @@ void CL_FreeState(void)
 	CL_ClearTrailStates();
 	PR_ClearProgs(&cl.qcvm);
 	free(cl.static_entities);
+	free(cl.ssqc_to_csqc);
 	memset (&cl, 0, sizeof(cl));
 }
 
@@ -107,6 +109,14 @@ CL_ClearState
 */
 void CL_ClearState (void)
 {
+	if (cl.qcvm.extfuncs.CSQC_Shutdown)
+	{
+		PR_SwitchQCVM(&cl.qcvm);
+		PR_ExecuteProgram(qcvm->extfuncs.CSQC_Shutdown);
+		qcvm->extfuncs.CSQC_Shutdown = 0;
+		PR_SwitchQCVM(NULL);
+	}
+
 	if (!sv.active)
 		Host_ClearMemory ();
 
@@ -231,6 +241,15 @@ void CL_EstablishConnection (const char *host)
 	MSG_WriteByte (&cls.message, clc_nop);	// NAT Fix from ProQuake
 }
 
+void CL_SendInitialUserinfo(void *ctx, const char *key, const char *val)
+{
+	if (*key == '*')
+		return;	//servers don't like that sort of userinfo key
+	if (!strcmp(key, "name"))
+		return;	//already unconditionally sent earlier.
+	MSG_WriteByte (&cls.message, clc_stringcmd);
+	MSG_WriteString (&cls.message, va("setinfo \"%s\" \"%s\"\n", key, val));
+}
 /*
 =====================
 CL_SignonReply
@@ -256,7 +275,10 @@ void CL_SignonReply (void)
 	case 2:
 
 		MSG_WriteByte (&cls.message, clc_stringcmd);
-		MSG_WriteString (&cls.message, va("color %i %i\n", ((int)cl_color.value)>>4, ((int)cl_color.value)&15));
+		MSG_WriteString (&cls.message, va("color %i %i\n", (int)cl_topcolor.value, (int)cl_bottomcolor.value));
+
+		if (*cl.serverinfo)
+			Info_Enumerate(cls.userinfo, CL_SendInitialUserinfo, NULL);
 
 		MSG_WriteByte (&cls.message, clc_stringcmd);
 		sprintf (str, "spawn %s", cls.spawnparms);
@@ -395,6 +417,8 @@ void CL_DecayLights (void)
 	float		time;
 
 	time = cl.time - cl.oldtime;
+	if (time < 0)
+		return;
 
 	dl = cl_dlights;
 	for (i=0 ; i<MAX_DLIGHTS ; i++, dl++)
@@ -1153,6 +1177,46 @@ void CL_AccumulateCmd (void)
 		//accumulate movement from other devices
 		IN_Move (&cl.pendingcmd);
 	}
+
+	cl.pendingcmd.seconds		= cl.mtime[0] - cl.pendingcmd.servertime;
+}
+
+void CL_CSQC_SetInputs(usercmd_t *cmd, qboolean set)
+{
+	if (set)
+	{
+		if (qcvm->extglobals.input_timelength)
+			*qcvm->extglobals.input_timelength = cmd->seconds;
+		if (qcvm->extglobals.input_angles)
+			VectorCopy(cmd->viewangles, qcvm->extglobals.input_angles);
+		if (qcvm->extglobals.input_movevalues)
+		{
+			qcvm->extglobals.input_movevalues[0] = cmd->forwardmove;
+			qcvm->extglobals.input_movevalues[1] = cmd->sidemove;
+			qcvm->extglobals.input_movevalues[2] = cmd->upmove;
+		}
+		if (qcvm->extglobals.input_buttons)
+			*qcvm->extglobals.input_buttons = cmd->buttons;
+		if (qcvm->extglobals.input_impulse)
+			*qcvm->extglobals.input_impulse = cmd->impulse;
+	}
+	else
+	{
+		if (qcvm->extglobals.input_timelength)
+			cmd->seconds = *qcvm->extglobals.input_timelength;
+		if (qcvm->extglobals.input_angles)
+			VectorCopy(qcvm->extglobals.input_angles, cmd->viewangles);
+		if (qcvm->extglobals.input_movevalues)
+		{
+			cmd->forwardmove = qcvm->extglobals.input_movevalues[0];
+			cmd->sidemove = qcvm->extglobals.input_movevalues[1];
+			cmd->upmove = qcvm->extglobals.input_movevalues[2];
+		}
+		if (qcvm->extglobals.input_buttons)
+			cmd->buttons = *qcvm->extglobals.input_buttons;
+		if (qcvm->extglobals.input_impulse)
+			cmd->impulse = *qcvm->extglobals.input_impulse;
+	}
 }
 
 /*
@@ -1167,22 +1231,34 @@ void CL_SendCmd (void)
 	if (cls.state != ca_connected)
 		return;
 
-	if (cls.signon == SIGNONS)
-	{
 	// get basic movement from keyboard
-		CL_BaseMove (&cmd);
+	CL_BaseMove (&cmd);
 
 	// allow mice or other external controllers to add to the move
-		cmd.forwardmove	+= cl.pendingcmd.forwardmove;
-		cmd.sidemove	+= cl.pendingcmd.sidemove;
-		cmd.upmove		+= cl.pendingcmd.upmove;
+	cmd.forwardmove	+= cl.pendingcmd.forwardmove;
+	cmd.sidemove	+= cl.pendingcmd.sidemove;
+	cmd.upmove		+= cl.pendingcmd.upmove;
+	cmd.sequence	= cl.movemessages;
+	cmd.servertime	= cl.time;
+	cmd.seconds		= cmd.servertime - cl.pendingcmd.servertime;
 
-	// send the unreliable message
-		CL_SendMove (&cmd);
+	CL_FinishMove(&cmd);
+
+	if (cl.qcvm.extfuncs.CSQC_Input_Frame && !cl.qcvm.nogameaccess)
+	{
+		PR_SwitchQCVM(&cl.qcvm);
+		CL_CSQC_SetInputs(&cmd, true);
+		PR_ExecuteProgram(cl.qcvm.extfuncs.CSQC_Input_Frame);
+//		CL_CSQC_SetInputs(&cmd, false);
+		PR_SwitchQCVM(NULL);
 	}
+
+	if (cls.signon == SIGNONS)
+		CL_SendMove (&cmd);	// send the unreliable message
 	else
 		CL_SendMove (NULL);
 	memset(&cl.pendingcmd, 0, sizeof(cl.pendingcmd));
+	cl.pendingcmd.servertime = cmd.servertime;
 
 	if (cls.demoplayback)
 	{
@@ -1263,17 +1339,160 @@ void CL_Viewpos_f (void)
 
 static void CL_ServerExtension_FullServerinfo_f(void)
 {
-//	const char *newserverinfo = Cmd_Argv(1);
+	const char *newserverinfo = Cmd_Argv(1);
+	Q_strncpy(cl.serverinfo, newserverinfo, sizeof(cl.serverinfo));	//just replace it
 }
 static void CL_ServerExtension_ServerinfoUpdate_f(void)
 {
-//	const char *newserverkey = Cmd_Argv(1);
-//	const char *newservervalue = Cmd_Argv(2);
+	const char *newserverkey = Cmd_Argv(1);
+	const char *newservervalue = Cmd_Argv(2);
+	Info_SetKey(cl.serverinfo, sizeof(cl.serverinfo), newserverkey, newservervalue);
 }
 
+static void CL_UserinfoChanged(scoreboard_t *sb)
+{
+	char tmp[64];
+	Info_GetKey(sb->userinfo, "name", sb->name, sizeof(sb->name));
+
+	Info_GetKey(sb->userinfo, "topcolor", tmp, sizeof(tmp));
+	sb->colors = (atoi(tmp)&15)<<4;
+	Info_GetKey(sb->userinfo, "bottomcolor", tmp, sizeof(tmp));
+	sb->colors |= (atoi(tmp)&15);
+}
+static void CL_ServerExtension_FullUserinfo_f(void)
+{
+	size_t slot = atoi(Cmd_Argv(1));
+	const char *newserverinfo = Cmd_Argv(2);
+	if (slot < cl.maxclients)
+	{
+		scoreboard_t *sb = &cl.scores[slot];
+		Q_strncpy(sb->userinfo, newserverinfo, sizeof(sb->userinfo));	//just replace it
+		CL_UserinfoChanged(sb);
+	}
+}
+static void CL_ServerExtension_UserinfoUpdate_f(void)
+{
+	size_t slot = atoi(Cmd_Argv(1));
+	const char *newserverkey = Cmd_Argv(2);
+	const char *newservervalue = Cmd_Argv(3);
+	if (slot < cl.maxclients)
+	{
+		scoreboard_t *sb = &cl.scores[slot];
+		Info_SetKey(sb->userinfo, sizeof(sb->userinfo), newserverkey, newservervalue);
+		CL_UserinfoChanged(sb);
+	}
+}
+static void SV_DecodeUserInfo(client_t *client)
+{
+	char tmp[64];
+	int top, bot;
+
+	//figure out the player's colours
+	Info_GetKey(client->userinfo, "topcolor", tmp, sizeof(tmp));
+	top = atoi(tmp)&15;
+	if (top > 13)
+		top = 13;
+	Info_GetKey(client->userinfo, "bottomcolor", tmp, sizeof(tmp));
+	bot = atoi(tmp)&15;
+	if (bot > 13)
+		bot = 13;
+	//update their entity
+	client->edict->v.team = bot+1;
+	client->colors = (top<<4) | bot;
+
+	//pick out a name and try to clean it up a little.
+	Info_GetKey(client->userinfo, "name", tmp, sizeof(tmp));
+	if (!*tmp)
+		q_strlcpy(tmp, "unnamed", sizeof(tmp));
+
+	if (Q_strcmp(client->name, tmp) != 0)
+	{	//name changed.
+		if (client->name[0] && strcmp(client->name, "unconnected") )
+			Con_Printf ("%s renamed to %s\n", host_client->name, tmp);
+		Q_strcpy (host_client->name, tmp);
+		client->edict->v.netname = PR_SetEngineString(client->name);
+	}
+}
+void SV_UpdateInfo(int edict, const char *keyname, const char *value)
+{
+	char oldvalue[1024];
+
+	char *info;
+	size_t infosize;
+	const char *pre;
+	client_t *cl;
+	client_t *infoplayer = NULL;
+
+	if (!edict)
+	{
+		cvar_t *var = Cvar_FindVar(keyname);
+		if (var && var->flags & CVAR_SERVERINFO)
+		{
+			Cvar_Set(var->name, value);
+			return;
+		}
+		info = svs.serverinfo;
+		infosize = sizeof(svs.serverinfo);
+		pre = "//svi ";
+	}
+	else if (edict <= svs.maxclients)
+	{
+		edict-=1;
+		infoplayer = &svs.clients[edict];
+		info = infoplayer->userinfo;
+		infosize = sizeof(infoplayer->userinfo);
+		pre = va("//ui %i", edict);
+	}
+	else
+		return;
+
+	Info_GetKey(info, keyname, oldvalue, sizeof(oldvalue));
+	if (strcmp(value, oldvalue))
+	{	//its changed. actually broadcast it.
+		Info_SetKey(info, infosize, keyname, value);
+		if (infoplayer)
+			SV_DecodeUserInfo(infoplayer);
+
+		if (*keyname == '_' || !sv.active)
+			return;	//underscore means private (user) keys. these are not networked to clients.
+
+		Info_GetKey(info, keyname, oldvalue, sizeof(oldvalue));
+		value = oldvalue;
+
+		for (cl = svs.clients; cl < svs.clients+svs.maxclients; cl++)
+		{
+			if (cl->active)
+			{
+				if (cl->protocol_pext2 & PEXT2_PREDINFO)
+				{
+					MSG_WriteByte (&cl->message, svc_stufftext);
+					MSG_WriteString (&cl->message, va("%s \"%s\" \"%s\"\n", pre, keyname, value));
+				}
+				else if (infoplayer && !strcmp(keyname, "name"))
+				{
+					MSG_WriteByte (&cl->message, svc_updatename);
+					MSG_WriteByte (&cl->message, edict);
+					MSG_WriteString (&cl->message, value);
+				}
+				else if (infoplayer && (!strcmp(keyname, "topcolor") || !strcmp(keyname, "bottomcolor")))
+				{
+					MSG_WriteByte (&cl->message, svc_updatecolors);
+					MSG_WriteByte (&cl->message, edict);
+					MSG_WriteByte (&cl->message, infoplayer->colors);
+				}
+			}
+		}
+	}
+}
 static void CL_ServerExtension_Ignore_f(void)
 {
 	Con_DPrintf2("Ignoring stufftext: %s\n", Cmd_Argv(0));
+}
+static void CL_LegacyColor_f(void)
+{	//spike -- code to handle the legacy _cl_color cvar (we now use separate qw-style topcolor/bottomcolor userinfo cvars)
+	int col = atoi(Cmd_Argv(1));
+	Cvar_SetValue("topcolor",		(col>>4)&0xf);
+	Cvar_SetValue("bottomcolor",	(col>>0)&0xf);
 }
 
 /*
@@ -1289,7 +1508,10 @@ void CL_Init (void)
 	CL_InitTEnts ();
 
 	Cvar_RegisterVariable (&cl_name);
-	Cvar_RegisterVariable (&cl_color);
+	Cvar_RegisterAlias    (&cl_name, "_cl_name");	//spike -- for compat with configs now that 'name' is a cvar in its own right.
+	Cvar_RegisterVariable (&cl_topcolor);
+	Cvar_RegisterVariable (&cl_bottomcolor);
+	Cmd_AddCommand ("_cl_color", CL_LegacyColor_f);	//for loading vanilla configs (we have separate qw-style topcolor/bottomcolor userinfo cvars instead)
 	Cvar_RegisterVariable (&cl_upspeed);
 	Cvar_RegisterVariable (&cl_forwardspeed);
 	Cvar_RegisterVariable (&cl_backspeed);
@@ -1327,9 +1549,15 @@ void CL_Init (void)
 	Cmd_AddCommand ("tracepos", CL_Tracepos_f); //johnfitz
 	Cmd_AddCommand ("viewpos", CL_Viewpos_f); //johnfitz
 
+	//spike -- serverinfo stuff
+	Cmd_AddCommand_ServerCommand ("fullserverinfo", CL_ServerExtension_FullServerinfo_f);
+	Cmd_AddCommand_ServerCommand ("svi", CL_ServerExtension_ServerinfoUpdate_f);
+
+	//spike -- userinfo stuff
+	Cmd_AddCommand_ServerCommand ("fui", CL_ServerExtension_FullUserinfo_f);
+	Cmd_AddCommand_ServerCommand ("ui", CL_ServerExtension_UserinfoUpdate_f);
+
 	//spike -- add stubs to mute various invalid stuffcmds
-	Cmd_AddCommand_ServerCommand ("fullserverinfo", CL_ServerExtension_FullServerinfo_f); //spike
-	Cmd_AddCommand_ServerCommand ("svi", CL_ServerExtension_ServerinfoUpdate_f); //spike
 	Cmd_AddCommand_ServerCommand ("paknames", CL_ServerExtension_Ignore_f); //package names in use by the server (including gamedir+extension)
 	Cmd_AddCommand_ServerCommand ("paks", CL_ServerExtension_Ignore_f); //provides hashes to go with the paknames list
 	//Cmd_AddCommand_ServerCommand ("vwep", CL_ServerExtension_Ignore_f); //invalid for nq, provides an alternative list of model precaches for vweps.
