@@ -19,6 +19,7 @@ Todo:
  - allow for changing antialiasing with only a vid_restart
  - fix msaa bugs
  - open console with ~ from menu
+ - nicer quit screen
  - new menu options:
    - filtering mode
    - anisotropy level
